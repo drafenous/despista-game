@@ -40,9 +40,10 @@ A instalação normal de dependências precisa de internet, incluindo acesso aos
 - Pausa ao entrar em segundo plano ou pressionar Voltar no Android.
 - Recorde local persistente com AsyncStorage. O recorde do navegador não é importado automaticamente.
 
-A lógica usa uma área de jogo de 420 × 780, escalada proporcionalmente dentro da área segura.
+A lógica usa uma área de jogo de 360 × 640, escalada proporcionalmente dentro da área segura.
 Isso mantém a mesma geometria e dificuldade entre proporções de tela diferentes.
 O recorde continua sendo o maior tempo geral, como no MVP; não é um ranking competitivo.
+
 
 ## Estrutura
 
@@ -54,7 +55,8 @@ O recorde continua sendo o maior tempo geral, como no MVP; não é um ranking co
 | `src/game/icons.js` | Ícones SVG originais dos itens |
 | `src/render/SkiaContext.ts` | Operações de desenho do MVP convertidas em chamadas Skia |
 | `src/components/GameCanvas.tsx` | Simulação em passos fixos e gravação das cenas |
-| `src/components/Joystick.tsx` | Controle touch em quatro direções |
+| `src/components/Joystick.tsx` | Joystick fixo (canto) em quatro direções |
+| `src/components/FloatingJoystick.tsx` | Joystick livre (aparece no ponto do toque) |
 | `src/storage/records.ts` | Recorde local e gravações serializadas |
 | `tests/engine.test.cjs` | Regressão e comparação determinística com o HTML v44 |
 | `tests/render.cjs` | Teste de renderização real com Skia/CanvasKit, sem aparelho |

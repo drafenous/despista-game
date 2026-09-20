@@ -5,10 +5,19 @@
  */
 /**
  * @param {{width?: number, height?: number, initialBest?: number,
- * random?: () => number, onBest?: (best: number) => void}} options
+ * random?: () => number, onBest?: (best: number) => void,
+ * onPowerPickup?: (type: string) => void, onPowerUse?: (type: string) => void}} options
  */
-export function createGame({width = 420, height = 780, initialBest = 0,
-  random = Math.random, onBest = () => {}} = {}) {
+export function createGame({width = 360, height = 640, initialBest = 0,
+  random = Math.random, onBest = () => {},
+  onPowerPickup = () => {}, onPowerUse = () => {}} = {}) {
+  /** Estatísticas da partida atual para conquistas (não afetam a simulação). */
+  let runStats = createEmptyRunStats();
+  let runLastDir = null;
+  let runDirsInEscape = new Set();
+  let runAlertItemsUsed = 0;
+  let runMaxBustedInAlert = 0;
+  let runSoapInAlert = false;
   const W = width, H = height;
   let ctx;
   let reason = null;
@@ -18,7 +27,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   let distanceTravelledUnits = 0;
   let screenDistanceTravelledUnits = 0;
   let lastMeasuredCameraY = 0;
-  const DISTANCE_UNITS_PER_METER = 20;
+  const DISTANCE_UNITS_PER_METER = 16;
   let suspicion = 0;
   let alert = false;
   let started = false;
@@ -42,6 +51,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   let invisibilityTimer = 0;
   let shieldPulseTimer = 0;
   let timeFreezeTimer = 0;
+  // Relógio das câmeras (sweep/rotate). Não avança com o tempo parado.
+  let cameraAnimTime = 0;
   let powerPickupFlash = 0;
   let powerPickupCooldown = 0;
 
@@ -52,6 +63,71 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   let chunksSincePowerUp = 0;
   let lastPowerType = null;
   let lastPowerSpawnY = -Infinity;
+
+  function createEmptyRunStats(){
+    return {
+      crowdCoverTime: 0,
+      crowdCoverStreak: 0,
+      crowdCoverStreakMax: 0,
+      suspicionLow50Time: 0,
+      suspicionLow20Time: 0,
+      noCameraTime: 0,
+      directionChanges: 0,
+      obstacleHit: false,
+      cleanDistanceMeters: 0,
+      skatesMeters: 0,
+      camerasClean: 0,
+      maxBusted: 0,
+      touchedPolice: false,
+      escapes: 0,
+      itemsUsed: 0,
+      itemsUsedInAlert: 0,
+      usedEscapeItem: false,
+      usedSoapInAlert: false,
+      usedCloakInAlert: false,
+      usedTeleportInBusted: false,
+      usedShieldNearCop: false,
+      usedStaff: false,
+      usedTime: false,
+      usedSkates: false,
+      alertEver: false,
+      antiCamp: false,
+      antiCampSurvived: false,
+      inventoryFull: false,
+      suspicionHit99: false,
+      suspicionRecovered: false,
+      dirsInEscape: [],
+      nearCaptureEscape: false,
+      escapeNoItems: false,
+      escapeOneItem: false,
+      hardEscape: false,
+      pickedTypes: [],
+      usedTypes: [],
+    };
+  }
+
+  function rememberType(list, type){
+    if(!list.includes(type)) list.push(type);
+  }
+
+  function noteEscape(natural){
+    runStats.escapes += 1;
+    runStats.itemsUsedInAlert = Math.max(runStats.itemsUsedInAlert, runAlertItemsUsed);
+    if(runAlertItemsUsed === 0) runStats.escapeNoItems = true;
+    if(runAlertItemsUsed === 1) runStats.escapeOneItem = true;
+    if(runMaxBustedInAlert >= 1) runStats.nearCaptureEscape = true;
+    if(runSoapInAlert) runStats.usedSoapInAlert = true;
+    if(runDirsInEscape.size >= 4){
+      runStats.dirsInEscape = [...runDirsInEscape];
+    }
+    if(natural && (difficulty === "hard" || difficulty === "pro")){
+      runStats.hardEscape = true;
+    }
+    runAlertItemsUsed = 0;
+    runMaxBustedInAlert = 0;
+    runSoapInAlert = false;
+    runDirsInEscape = new Set();
+  }
 
   const POWER_TYPES = {
     escape: {
@@ -110,7 +186,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   const input = {x:0, y:0, active:false, pointerId:null, originX:0, originY:0};
 
   const player = {
-    x: W/2, y: 0, r: 10, speed: 185, vx:0, vy:0
+    x: W/2, y: 0, r: 12, speed: 185, vx:0, vy:0
   };
 
   const npcs = [];
@@ -212,10 +288,14 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     return {
       easy:"20% menos NPCs em tela.",
       medium:"Como está agora, mas você pode encostar no canto inferior da tela sem a câmera recuar.",
-      hard:"Como o Médio, porém a tela sobe automaticamente devagar.",
-      pro:"Como o Difícil, com 10% mais policiais em tela.",
-      impossible:"Como o Pro, mas a perseguição é permanente. O objetivo é sobreviver o máximo possível."
+      hard:"Como o Médio, porém a tela sobe automaticamente devagar. Sem pausa.",
+      pro:"Como o Difícil, com 10% mais policiais em tela. Sem pausa.",
+      impossible:"Como o Pro, mas a perseguição é permanente. Sem pausa. O objetivo é sobreviver o máximo possível."
     }[value];
+  }
+
+  function allowsPause(){
+    return difficulty !== "hard" && difficulty !== "pro" && difficulty !== "impossible";
   }
 
   function pursuitEscapeTarget(){
@@ -245,6 +325,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
   function setPaused(value){
     if(!started || gameOver) return;
+    if(value && !allowsPause()) return;
     paused = !!value;
     keys.clear();
     input.active = false;
@@ -252,7 +333,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
   function togglePause(){ setPaused(!paused); }
 
-  function clearPursuit(){
+  function clearPursuit({countEscape = false, natural = false} = {}){
+    const wasAlert = alert;
     alert=false;
     suspicion=0;
     pursuitEscapeTimer=0;
@@ -270,6 +352,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     for(const camera of cameras){
       camera.seeingPlayer=false;
     }
+
+    if(countEscape && wasAlert) noteEscape(natural);
   }
 
   function findTeleportDestination(distance=320){
@@ -303,6 +387,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   function activateShield(){
     const radius=150;
     shieldPulseTimer=.45;
+    let hitCop=false;
 
     const repel=(entity,extraPush=0)=>{
       let dx=entity.x-player.x;
@@ -312,7 +397,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       if(d<.001){ dx=1;dy=0;d=1; }
 
       const push=58 + (1-d/radius)*48 + extraPush;
-      entity.x=clamp(entity.x+(dx/d)*push,18,W-18);
+      entity.x=clamp(entity.x+(dx/d)*push,16,W-16);
       entity.y+=(dy/d)*push;
       entity.stunTimer=1;
 
@@ -323,7 +408,11 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     };
 
     for(const npc of npcs) repel(npc);
-    for(const cop of cops) repel(cop,12);
+    for(const cop of cops){
+      if(dist(cop.x,cop.y,player.x,player.y)<=radius) hitCop=true;
+      repel(cop,12);
+    }
+    if(hitCop) runStats.usedShieldNearCop=true;
   }
 
   function usePowerUp(slotIndex){
@@ -331,20 +420,33 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     const type=inventory[slotIndex];
     if(!type) return;
 
+    runStats.itemsUsed += 1;
+    rememberType(runStats.usedTypes, type);
+    if(alert){
+      runAlertItemsUsed += 1;
+      runStats.itemsUsedInAlert = Math.max(runStats.itemsUsedInAlert, runAlertItemsUsed);
+    }
+
     if(type==="escape"){
-      clearPursuit();
+      runStats.usedEscapeItem=true;
+      clearPursuit({countEscape:true, natural:false});
       escapeImmunityTimer=3;
       // No Impossível, a perseguição volta somente quando a imunidade acabar.
       impossiblePursuitStarted=false;
     }else if(type==="soap"){
       soapTimer=5;
+      if(alert) runSoapInAlert=true;
     }else if(type==="skates"){
       skatesTimer=10;
+      runStats.usedSkates=true;
     }else if(type==="staff"){
       staffTimer=5;
+      runStats.usedStaff=true;
     }else if(type==="invis"){
       invisibilityTimer=10;
+      if(alert) runStats.usedCloakInAlert=true;
     }else if(type==="teleport"){
+      if(bustedTimer > 0) runStats.usedTeleportInBusted=true;
       const dest=findTeleportDestination(320);
       player.x=dest.x;
       player.y=dest.y;
@@ -355,10 +457,11 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       activateShield();
     }else if(type==="time"){
       timeFreezeTimer=10;
+      runStats.usedTime=true;
     }
 
     inventory.splice(slotIndex,1);
-
+    onPowerUse(type);
 
   }
 
@@ -378,14 +481,14 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       if(Math.abs(y-lastPowerSpawnY)<115) continue;
       if(isInsidePlayerSpawnSafeZone(x,y,65)) continue;
 
-      const probe={x,y,r:14};
+      const probe={x,y,r:16};
       if(obstacles.some(o => Math.abs((o.y+o.h/2)-y)<60 && circleIntersectsRect(probe,o))) continue;
       if(cops.some(c => dist(c.x,c.y,x,y)<48)) continue;
       if(npcs.some(n => dist(n.x,n.y,x,y)<36)) continue;
       if(powerUps.some(p => dist(p.x,p.y,x,y)<95)) continue;
 
       powerUps.push({
-        x,y,type,r:13,
+        x,y,type,r:16,
         phase:rand(0,Math.PI*2)
       });
 
@@ -429,6 +532,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     invisibilityTimer = 0;
     shieldPulseTimer = 0;
     timeFreezeTimer = 0;
+    cameraAnimTime = 0;
     powerPickupFlash = 0;
     powerPickupCooldown = 0;
     inventory.length = 0;
@@ -445,6 +549,12 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     cameras.length = 0;
     decor.length = 0;
     obstacles.length = 0;
+    runStats = createEmptyRunStats();
+    runLastDir = null;
+    runDirsInEscape = new Set();
+    runAlertItemsUsed = 0;
+    runMaxBustedInAlert = 0;
+    runSoapInAlert = false;
 
     player.x = W/2;
     player.y = 40;
@@ -497,6 +607,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       impossiblePursuitStarted = true;
       mainPursuer = nearestOnScreenCop();
       for(const cop of cops) cop.chase = true;
+      runStats.alertEver = true;
     }
   }
 
@@ -514,26 +625,320 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     }
   }
 
+  /** 1 SQM = uma célula da grid de mundo (calçada / NPCs / obstáculos). */
+  const SQM = 32;
+  const NPC_GRID = SQM;
+  const MAX_NPCS_PER_ROW = 3;
+  const MAX_NPCS_PER_COL = 6;
+  const MAX_ON_SCREEN_ACTORS = 24; // civis + policiais
+  const MAX_ON_SCREEN_CAMERAS = 3;
+  const MAX_LIVE_NPCS = 64;
+  const NPC_MIN_SEPARATION = 24; // ~2*r + folga; evita empilhar corpos
+  const crowdCellBuckets = new Map();
+  const crowdNeighborBuf = [];
+
+  function crowdCellKey(col, row){
+    return (row + 1048576) * 4096 + (col + 1024);
+  }
+
+  function isWorldYOnScreen(worldY, margin=40){
+    const sy = screenY(worldY);
+    return sy >= -margin && sy <= H + margin;
+  }
+
+  function actorsNearY(worldY){
+    // Janela ~altura da tela: quem compartilharia a viewport com este Y.
+    const half = H * .5 + 80;
+    let n = 0;
+    for(const npc of npcs){
+      if(Math.abs(npc.y - worldY) <= half) n++;
+    }
+    for(const cop of cops){
+      if(Math.abs(cop.y - worldY) <= half) n++;
+    }
+    return n;
+  }
+
+  function camerasNearY(worldY){
+    const half = H * .5 + 80;
+    let n = 0;
+    for(const camera of cameras){
+      if(Math.abs(camera.y - worldY) <= half) n++;
+    }
+    return n;
+  }
+
+  function canSpawnActorAt(y){
+    return actorsNearY(y) < MAX_ON_SCREEN_ACTORS;
+  }
+
+  function canSpawnCameraAt(y){
+    return camerasNearY(y) < MAX_ON_SCREEN_CAMERAS;
+  }
+
+  function enforceOnScreenActorLimit(){
+    const visible = [];
+    for(const npc of npcs){
+      if(isWorldYOnScreen(npc.y)) visible.push({ kind:"npc", ref:npc });
+    }
+    for(const cop of cops){
+      if(isWorldYOnScreen(cop.y, 50)) visible.push({ kind:"cop", ref:cop });
+    }
+    const excess = visible.length - MAX_ON_SCREEN_ACTORS;
+    if(excess <= 0) return;
+
+    // Remove civis mais longe do player primeiro; não remove policiais.
+    const civilians = visible
+      .filter(e => e.kind === "npc")
+      .sort((a,b) =>
+        dist(b.ref.x,b.ref.y,player.x,player.y) - dist(a.ref.x,a.ref.y,player.x,player.y)
+      );
+
+    let removed = 0;
+    for(const entry of civilians){
+      if(removed >= excess) break;
+      const idx = npcs.indexOf(entry.ref);
+      if(idx >= 0){
+        npcs.splice(idx,1);
+        removed++;
+      }
+    }
+  }
+
+  function enforceOnScreenCameraLimit(){
+    const visible = [];
+    for(const camera of cameras){
+      if(isWorldYOnScreen(camera.y, 50)) visible.push(camera);
+    }
+    const excess = visible.length - MAX_ON_SCREEN_CAMERAS;
+    if(excess <= 0) return;
+
+    visible.sort((a,b) =>
+      dist(b.x,b.y,player.x,player.y) - dist(a.x,a.y,player.x,player.y)
+    );
+
+    for(let i=0;i<excess;i++){
+      const idx = cameras.indexOf(visible[i]);
+      if(idx >= 0) cameras.splice(idx,1);
+    }
+  }
+
+  function npcGridCell(x,y){
+    return {
+      row: Math.floor(y / NPC_GRID),
+      col: Math.floor(x / NPC_GRID)
+    };
+  }
+
+  function isNpcGridCellTaken(row,col){
+    for(const npc of npcs){
+      const cell = npcGridCell(npc.x,npc.y);
+      if(cell.row === row && cell.col === col) return true;
+    }
+    return false;
+  }
+
+  function isTooCloseToCrowd(x,y,minDist=NPC_MIN_SEPARATION){
+    for(const npc of npcs){
+      if(dist(npc.x,npc.y,x,y) < minDist) return true;
+    }
+    for(const cop of cops){
+      if(dist(cop.x,cop.y,x,y) < minDist + 4) return true;
+    }
+    return false;
+  }
+
+  function npcGridOccupancy(preferredY){
+    const rows = new Map();
+    const cols = new Map();
+    // Colunas: só conta NPCs na janela da tela, senão faixas antigas
+    // “entopem” e abrem corredores vazios nos chunks novos.
+    const colWindow = H;
+    for(const npc of npcs){
+      const cell = npcGridCell(npc.x,npc.y);
+      rows.set(cell.row, (rows.get(cell.row) || 0) + 1);
+      if(Math.abs(npc.y - preferredY) <= colWindow){
+        cols.set(cell.col, (cols.get(cell.col) || 0) + 1);
+      }
+    }
+    return { rows, cols };
+  }
+
+  function canPlaceNpcAtCell(row,col,occupancy){
+    if(isNpcGridCellTaken(row,col)) return false;
+    return (occupancy.rows.get(row) || 0) < MAX_NPCS_PER_ROW
+      && (occupancy.cols.get(col) || 0) < MAX_NPCS_PER_COL;
+  }
+
+  function pickNpcGridPlacement(preferredY){
+    const occupancy = npcGridOccupancy(preferredY);
+    const minCol = Math.floor(24 / NPC_GRID);
+    const maxCol = Math.floor((W - 24) / NPC_GRID);
+    const baseRow = Math.floor(preferredY / NPC_GRID);
+
+    // Prioriza linhas perto do Y pedido; depois abre o leque para preencher buracos.
+    const rowOrder = [];
+    const maxRowSpan = 6;
+    for(let span=0; span<=maxRowSpan; span++){
+      for(const row of (span === 0 ? [baseRow] : [baseRow - span, baseRow + span])){
+        if(row < 0) continue;
+        if(!rowOrder.includes(row)) rowOrder.push(row);
+      }
+    }
+
+    let best = null;
+    let bestScore = Infinity;
+
+    for(const row of rowOrder){
+      const rowCount = occupancy.rows.get(row) || 0;
+      if(rowCount >= MAX_NPCS_PER_ROW) continue;
+
+      for(let col=minCol; col<=maxCol; col++){
+        if(!canPlaceNpcAtCell(row,col,occupancy)) continue;
+
+        // Centro da célula, sem jitter — evita dois NPCs grudarem na borda.
+        const x = clamp(col * NPC_GRID + NPC_GRID * .5, 24, W-24);
+        const spawnY = row * NPC_GRID + NPC_GRID * .5;
+        if(isInsidePlayerSpawnSafeZone(x,spawnY,12)) continue;
+        if(isTooCloseToCrowd(x,spawnY)) continue;
+
+        // Prefere células em linhas/colunas mais vazias e próximas do Y alvo.
+        const colCount = occupancy.cols.get(col) || 0;
+        const score = rowCount * 4 + colCount * 3 + Math.abs(row - baseRow) * 2 + random() * .5;
+        if(score < bestScore){
+          bestScore = score;
+          best = { x, y: spawnY };
+        }
+      }
+    }
+
+    return best;
+  }
+
+  function separateOverlappingCrowd(){
+    // Spatial hash on NPC_GRID: only test neighbors in adjacent cells, in
+    // ascending (i,j) order (same resolution order as a nested scan).
+    for(const bucket of crowdCellBuckets.values()) bucket.length = 0;
+    crowdCellBuckets.clear();
+    const startCol = [];
+    const startRow = [];
+    for(let i=0;i<npcs.length;i++){
+      const npc = npcs[i];
+      const col = Math.floor(npc.x / NPC_GRID);
+      const row = Math.floor(npc.y / NPC_GRID);
+      startCol[i] = col;
+      startRow[i] = row;
+      const key = crowdCellKey(col, row);
+      let bucket = crowdCellBuckets.get(key);
+      if(!bucket){
+        bucket = [];
+        crowdCellBuckets.set(key, bucket);
+      }
+      bucket.push(i);
+    }
+
+    for(let i=0;i<npcs.length;i++){
+      const a = npcs[i];
+      crowdNeighborBuf.length = 0;
+      for(let dr=-1;dr<=1;dr++){
+        for(let dc=-1;dc<=1;dc++){
+          const bucket = crowdCellBuckets.get(crowdCellKey(startCol[i] + dc, startRow[i] + dr));
+          if(!bucket) continue;
+          for(let k=0;k<bucket.length;k++){
+            const j = bucket[k];
+            if(j > i) crowdNeighborBuf.push(j);
+          }
+        }
+      }
+      crowdNeighborBuf.sort((x, y) => x - y);
+      let prev = -1;
+      for(let n=0;n<crowdNeighborBuf.length;n++){
+        const j = crowdNeighborBuf[n];
+        if(j === prev) continue;
+        prev = j;
+        const b = npcs[j];
+        if(Math.abs(a.y - b.y) > NPC_MIN_SEPARATION + 4) continue;
+
+        let d = dist(a.x,a.y,b.x,b.y);
+        const minD = NPC_MIN_SEPARATION;
+        if(d >= minD) continue;
+
+        if(d < .001){
+          const angle = rand(0, Math.PI * 2);
+          a.x = clamp(a.x + Math.cos(angle) * 8, 16, W-16);
+          a.y += Math.sin(angle) * 8;
+          d = dist(a.x,a.y,b.x,b.y);
+          if(d < .001) continue;
+        }
+
+        const push = (minD - d) * .5;
+        const nx = (a.x - b.x) / d;
+        const ny = (a.y - b.y) / d;
+        a.x = clamp(a.x + nx * push, 16, W-16);
+        a.y += ny * push;
+        b.x = clamp(b.x - nx * push, 16, W-16);
+        b.y -= ny * push;
+
+        const spA = clamp(Math.hypot(a.vx,a.vy) || 28, 22, 50);
+        const spB = clamp(Math.hypot(b.vx,b.vy) || 28, 22, 50);
+        if(a.axis === "h"){
+          a.axis = "v";
+          a.vx = 0;
+          a.vy = (random() < .5 ? -1 : 1) * spA;
+        }else{
+          a.axis = "h";
+          a.vy = 0;
+          a.vx = (random() < .5 ? -1 : 1) * spA;
+        }
+        if(b.axis === "h"){
+          b.axis = "v";
+          b.vx = 0;
+          b.vy = (random() < .5 ? -1 : 1) * spB;
+        }else{
+          b.axis = "h";
+          b.vy = 0;
+          b.vx = (random() < .5 ? -1 : 1) * spB;
+        }
+        a.turn = Math.min(a.turn, rand(.4,.9));
+        b.turn = Math.min(b.turn, rand(.4,.9));
+      }
+
+      for(const cop of cops){
+        if(Math.abs(a.y - cop.y) > NPC_MIN_SEPARATION + 8) continue;
+        let d = dist(a.x,a.y,cop.x,cop.y);
+        const minD = NPC_MIN_SEPARATION + 4;
+        if(d >= minD) continue;
+
+        if(d < .001){
+          a.x = clamp(a.x + rand(-10,10), 16, W-16);
+          a.y += rand(-10,10);
+          d = dist(a.x,a.y,cop.x,cop.y);
+          if(d < .001) continue;
+        }
+
+        const push = minD - d;
+        const nx = (a.x - cop.x) / d;
+        const ny = (a.y - cop.y) / d;
+        a.x = clamp(a.x + nx * push, 16, W-16);
+        a.y += ny * push;
+      }
+    }
+  }
+
   function spawnNPC(y){
+    if(!canSpawnActorAt(y)) return;
+
     const horizontal = random() < .5;
     const sign = random() < .5 ? -1 : 1;
     const speed = rand(24,48);
 
-    let x = rand(24,W-24);
-    let spawnY = y;
-
-    // Durante o começo do mapa, evita qualquer NPC grudado no player.
-    for(let attempt=0; attempt<12 && isInsidePlayerSpawnSafeZone(x,spawnY,12); attempt++){
-      x = rand(24,W-24);
-      spawnY = y + rand(-26,26);
-    }
-
-    if(isInsidePlayerSpawnSafeZone(x,spawnY,12)){
-      spawnY = 40 + 100;
-    }
+    const placement = pickNpcGridPlacement(y);
+    if(!placement) return;
+    if(!canSpawnActorAt(placement.y)) return;
+    if(npcs.length >= MAX_LIVE_NPCS) return;
 
     npcs.push({
-      x, y:spawnY,
+      x: placement.x, y: placement.y,
       vx: horizontal ? sign*speed : 0,
       vy: horizontal ? 0 : sign*speed,
       axis: horizontal ? "h" : "v",
@@ -545,6 +950,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function spawnCop(y){
+    if(!canSpawnActorAt(y)) return;
+
     const horizontal = random() < .5;
     const sign = random() < .5 ? -1 : 1;
     const s = rand(34,52);
@@ -556,17 +963,29 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       spawnY = Math.max(spawnY, initialPoliceMinWorldY() + rand(0,90));
     }
 
+    if(!canSpawnActorAt(spawnY)) return;
+
+    let x = rand(34,W-34);
+    let placed = false;
+    for(let attempt=0; attempt<16; attempt++){
+      x = rand(34,W-34);
+      if(isTooCloseToCrowd(x,spawnY,NPC_MIN_SEPARATION + 4)) continue;
+      placed = true;
+      break;
+    }
+    if(!placed) return;
+
     cops.push({
-      x: rand(34,W-34), y:spawnY,
+      x, y:spawnY,
       vx: horizontal ? sign*s : 0,
       vy: horizontal ? 0 : sign*s,
       axis: horizontal ? "h" : "v",
-      r:10,
-      dangerRadius:22,
+      r:12,
+      dangerRadius:24,
       face: horizontal
         ? (sign < 0 ? Math.PI : 0)
         : (sign < 0 ? -Math.PI/2 : Math.PI/2),
-      vision: rand(125,165),
+      vision: rand(112,152),
       fov: Math.PI/3.1,
       chase:false,
       seeingPlayer:false,
@@ -585,7 +1004,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     }
 
     if(camera.mode==="sweep"){
-      const sweep = Math.sin(elapsed*camera.sweepSpeed + camera.phase) * (Math.PI/2);
+      const sweep = Math.sin(cameraAnimTime*camera.sweepSpeed + camera.phase) * (Math.PI/2);
       return [camera.baseFace + sweep];
     }
 
@@ -615,6 +1034,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function spawnCamera(startY,chunkH){
+    if(!canSpawnCameraAt(startY + chunkH * .5)) return;
+
     const roll=random();
     let mode;
 
@@ -634,9 +1055,10 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       const x=rand(30,W-30);
       const y=startY+rand(38,chunkH-38);
 
+      if(!canSpawnCameraAt(y)) continue;
       if(isInsidePlayerSpawnSafeZone(x,y,72)) continue;
 
-      const probe={x,y,r:12};
+      const probe={x,y,r:16};
       if(obstacles.some(o =>
         Math.abs((o.y+o.h/2)-y)<60 && circleIntersectsRect(probe,o)
       )) continue;
@@ -660,17 +1082,19 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
       cameras.push({
         x,y,
-        r:9,
+        r:8,
         mode,
         face,
         baseFace,
-        vision:rand(135,170),
+        vision:rand(120,160),
         fov:Math.PI/3.1,
         phase:rand(0,Math.PI*2),
         sweepSpeed:rand(.65,1.05),
         rotationDir:random()<.5 ? -1 : 1,
         rotationSpeed:rand(.55,.9),
-        seeingPlayer:false
+        seeingPlayer:false,
+        spottedPlayer:false,
+        everOnScreen:false
       });
 
       return;
@@ -687,29 +1111,44 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function spawnObstacle(startY, chunkH){
+    // Hitbox = N×M SQMs; posição sempre no canto inferior-esquerdo da célula.
     const types = [
-      {type:"bench", w:54, h:20},
-      {type:"trash", w:24, h:24},
-      {type:"planter", w:34, h:34},
-      {type:"barrier", w:62, h:18},
-      {type:"crate", w:30, h:30}
+      {type:"bench", sqmW:2, sqmH:1},
+      {type:"trash", sqmW:1, sqmH:1},
+      {type:"planter", sqmW:1, sqmH:1},
+      {type:"barrier", sqmW:2, sqmH:1},
+      {type:"crate", sqmW:1, sqmH:1}
     ];
+
+    const edgePad = SQM;
 
     for(let attempt=0; attempt<12; attempt++){
       const spec = types[Math.floor(random()*types.length)];
-      const x = rand(22, Math.max(23, W-spec.w-22));
-      const y = startY + rand(28, chunkH-spec.h-24);
+      const w = spec.sqmW * SQM;
+      const h = spec.sqmH * SQM;
+
+      const minX = edgePad;
+      const maxX = Math.floor((W - edgePad - w) / SQM) * SQM;
+      if(maxX < minX) continue;
+
+      const minY = Math.ceil((startY + SQM) / SQM) * SQM;
+      const maxY = Math.floor((startY + chunkH - h - SQM) / SQM) * SQM;
+      if(maxY < minY) continue;
+
+      const xSteps = Math.floor((maxX - minX) / SQM);
+      const ySteps = Math.floor((maxY - minY) / SQM);
+      const x = minX + Math.floor(random() * (xSteps + 1)) * SQM;
+      const y = minY + Math.floor(random() * (ySteps + 1)) * SQM;
 
       // Nunca gera obstáculos no ponto de spawn do jogador.
-      if(rectTouchesPlayerSpawnSafeZone(x,y,spec.w,spec.h,10)) continue;
+      if(rectTouchesPlayerSpawnSafeZone(x,y,w,h,10)) continue;
 
-      // Evita bloquear totalmente a passagem e concentra os objetos nas laterais/miolo.
-      if(overlapsObstacleArea(x,y,spec.w,spec.h,14)) continue;
+      // Evita empilhar obstáculos (folga ~½ SQM entre caixas).
+      if(overlapsObstacleArea(x,y,w,h, SQM * .5)) continue;
 
       obstacles.push({
         x, y,
-        w: spec.w,
-        h: spec.h,
+        w, h,
         type: spec.type
       });
       return;
@@ -729,6 +1168,44 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     const dy=ay-by;
     const rr=ar+br;
     return dx*dx + dy*dy < rr*rr;
+  }
+
+  // Player vs civis: barreiras sólidas (ignoradas com Sabonete).
+  // Bloqueia só se ainda há overlap e o passo não está afastando.
+  function playerOverlapsBlockingNpc(px, py, fromX, fromY){
+    if(soapTimer>0) return false;
+    for(const npc of npcs){
+      if(Math.abs(npc.y-py)>32 && Math.abs(npc.y-fromY)>32) continue;
+      if(!circlesOverlap(px,py,player.r,npc.x,npc.y,npc.r)) continue;
+      const previousDistance = dist(npc.x,npc.y,fromX,fromY);
+      const candidateDistance = dist(npc.x,npc.y,px,py);
+      if(candidateDistance > previousDistance + 0.001) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // Corpo do policial (hitbox física; dangerRadius é só BUSTED).
+  function playerOverlapsCopBody(px, py, fromX, fromY){
+    for(const cop of cops){
+      if(Math.abs(cop.y-py)>40 && Math.abs(cop.y-fromY)>40) continue;
+      const bodyRadius = cop.r + 4;
+      if(!circlesOverlap(px,py,player.r,cop.x,cop.y,bodyRadius)) continue;
+      const previousDistance = dist(cop.x,cop.y,fromX,fromY);
+      const candidateDistance = dist(cop.x,cop.y,px,py);
+      if(candidateDistance > previousDistance + 0.001) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function playerHitsObstacleAt(px, py){
+    const probe = { x:px, y:py, r:player.r };
+    for(const o of obstacles){
+      if(Math.abs((o.y+o.h/2)-py) > 70) continue;
+      if(circleIntersectsRect(probe,o)) return true;
+    }
+    return false;
   }
 
   function resolveCircleRect(entity, obstacle, softness=1){
@@ -813,9 +1290,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function generateChunk(startY){
-    const chunkH = 220;
+    const chunkH = 192;
     const cfg = difficultyConfig();
-    const npcCount = Math.max(1, Math.floor(rand(10,16) * cfg.npcMultiplier));
+    const npcCount = Math.max(1, Math.floor(rand(8,12) * cfg.npcMultiplier));
     let copCount = random() < .28 ? 2 : 1;
 
     if(cfg.copMultiplier > 1){
@@ -862,7 +1339,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function ensureWorld(){
-    const target = cameraY + H + 420;
+    const target = cameraY + H + W;
     while(generatedUntil < target){
       generateChunk(generatedUntil);
     }
@@ -904,7 +1381,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function effectiveDangerRadius(cop){
-    return alert ? cop.dangerRadius + 12 : cop.dangerRadius;
+    return alert ? cop.dangerRadius + 16 : cop.dangerRadius;
   }
 
   function effectiveFov(cop){
@@ -935,6 +1412,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     invisibilityTimer=Math.max(0,invisibilityTimer-dt);
     shieldPulseTimer=Math.max(0,shieldPulseTimer-dt);
     timeFreezeTimer=Math.max(0,timeFreezeTimer-dt);
+    if(timeFreezeTimer<=0) cameraAnimTime += dt;
     powerPickupFlash=Math.max(0,powerPickupFlash-dt);
     powerPickupCooldown=Math.max(0,powerPickupCooldown-dt);
 
@@ -942,10 +1420,21 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     const density = crowdDensity();
 
     const isPlayerTryingToMove = Math.abs(v.x) > 0 || Math.abs(v.y) > 0;
+    let dirKey = null;
+    if(Math.abs(v.x) > Math.abs(v.y) && Math.abs(v.x) > 0) dirKey = v.x > 0 ? "r" : "l";
+    else if(Math.abs(v.y) > 0) dirKey = v.y > 0 ? "u" : "d";
+    if(dirKey){
+      if(runLastDir && runLastDir !== dirKey) runStats.directionChanges += 1;
+      runLastDir = dirKey;
+      if(alert) runDirsInEscape.add(dirKey);
+    }
 
     if(isPlayerTryingToMove){
       playerIdleTimer = 0;
-      if(idleHunterCop) idleHunterCop.avoidTimer = 0;
+      if(idleHunterCop){
+        idleHunterCop.avoidTimer = 0;
+        if(runStats.antiCamp) runStats.antiCampSurvived = true;
+      }
       idleHunterCop = null;
     }else if(!alert){
       playerIdleTimer += dt;
@@ -954,6 +1443,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       // abandona temporariamente a patrulha e vai na direção do player.
       if(playerIdleTimer >= 3 && !idleHunterCop){
         idleHunterCop = nearestOnScreenCop();
+        if(idleHunterCop) runStats.antiCamp = true;
       }
     }
 
@@ -966,61 +1456,33 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     const previousPlayerX = player.x;
     const previousPlayerY = player.y;
 
-    player.x = clamp(player.x + player.vx*dt, 14, W-14);
-    player.y += player.vy*dt;
-
-    // Colisão seca com obstáculos fixos:
-    // se tentou entrar no objeto, cancela todo o movimento daquele frame.
-    let playerBlocked = false;
-
-    for(const o of obstacles){
-      if(Math.abs((o.y+o.h/2)-player.y) > 70) continue;
-      if(circleIntersectsRect(player,o)){
-        playerBlocked = true;
-        break;
-      }
+    // Slide por eixo vs NPC/cop: bloqueia só o eixo que entra no contato,
+    // para o player deslizar ao longo da multidão em vez de grudar.
+    player.x = clamp(previousPlayerX + player.vx*dt, 16, W-16);
+    if(
+      playerOverlapsBlockingNpc(player.x, previousPlayerY, previousPlayerX, previousPlayerY) ||
+      playerOverlapsCopBody(player.x, previousPlayerY, previousPlayerX, previousPlayerY)
+    ){
+      player.x = previousPlayerX;
+      player.vx = 0;
     }
 
-    // NPCs funcionam como barreiras, mas sem "grudar" o player.
-    // Bloqueia somente se o movimento atual estiver aproximando/entrando no NPC.
-    if(!playerBlocked && soapTimer<=0){
-      for(const npc of npcs){
-        if(Math.abs(npc.y-player.y)>32) continue;
-
-        const contact = npc.r + player.r;
-        const previousDistance = dist(npc.x,npc.y,previousPlayerX,previousPlayerY);
-        const candidateDistance = dist(npc.x,npc.y,player.x,player.y);
-
-        if(candidateDistance < contact && candidateDistance <= previousDistance + 0.001){
-          playerBlocked = true;
-          break;
-        }
-      }
+    player.y = previousPlayerY + player.vy*dt;
+    if(
+      playerOverlapsBlockingNpc(player.x, player.y, player.x, previousPlayerY) ||
+      playerOverlapsCopBody(player.x, player.y, player.x, previousPlayerY)
+    ){
+      player.y = previousPlayerY;
+      player.vy = 0;
     }
 
-    // O corpo do policial é uma hitbox física sólida.
-    // A dangerRadius continua sendo apenas a área de BUSTED.
-    if(!playerBlocked){
-      for(const cop of cops){
-        if(Math.abs(cop.y-player.y)>40) continue;
-
-        const bodyRadius = cop.r + 2;
-        const previousDistance = dist(cop.x,cop.y,previousPlayerX,previousPlayerY);
-        const candidateDistance = dist(cop.x,cop.y,player.x,player.y);
-        const contact = bodyRadius + player.r;
-
-        if(candidateDistance < contact && candidateDistance <= previousDistance + 0.001){
-          playerBlocked = true;
-          break;
-        }
-      }
-    }
-
-    if(playerBlocked){
+    // Obstáculos fixos: hard-stop do frame inteiro (parede sólida).
+    if(playerHitsObstacleAt(player.x, player.y)){
       player.x = previousPlayerX;
       player.y = previousPlayerY;
       player.vx = 0;
       player.vy = 0;
+      runStats.obstacleHit = true;
     }
 
     // câmera nunca recua.
@@ -1059,6 +1521,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       player.x,
       player.y
     );
+    const frameMeters = dist(previousPlayerX, previousPlayerY, player.x, player.y) / DISTANCE_UNITS_PER_METER;
+    if(!runStats.obstacleHit) runStats.cleanDistanceMeters += frameMeters;
+    if(skatesTimer > 0) runStats.skatesMeters += frameMeters;
 
     // Distância de tela: mede somente o avanço da câmera pelo mundo.
     // Como a câmera nunca recua, contamos apenas deltas positivos.
@@ -1150,12 +1615,12 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
       npc.x += npc.vx*dt;
       npc.y += npc.vy*dt;
-      if(npc.x<14){
-        npc.x=14;
+      if(npc.x<16){
+        npc.x=16;
         if(npc.axis==="h") npc.vx=Math.abs(npc.vx);
       }
-      if(npc.x>W-14){
-        npc.x=W-14;
+      if(npc.x>W-16){
+        npc.x=W-16;
         if(npc.axis==="h") npc.vx=-Math.abs(npc.vx);
       }
 
@@ -1202,6 +1667,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
         npc.turn = rand(.45,1.1);
       }
     }
+
+    // Evita civis (e civis vs policial) empilharem uns nos outros.
+    separateOverlappingCrowd();
 
     let seen = false;
     let nearestSeeingCop = null;
@@ -1311,7 +1779,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       cop.y += cop.vy*dt;
 
       // Policiais também não atravessam o player.
-      if(circlesOverlap(cop.x,cop.y,cop.r+2,player.x,player.y,player.r)){
+      if(circlesOverlap(cop.x,cop.y,cop.r+4,player.x,player.y,player.r)){
         cop.x = previousCopX;
         cop.y = previousCopY;
 
@@ -1326,12 +1794,12 @@ export function createGame({width = 420, height = 780, initialBest = 0,
         }
       }
 
-      if(cop.x<18){
-        cop.x=18;
+      if(cop.x<16){
+        cop.x=16;
         if(cop.axis==="h") cop.vx=Math.abs(cop.vx);
       }
-      if(cop.x>W-18){
-        cop.x=W-18;
+      if(cop.x>W-16){
+        cop.x=W-16;
         if(cop.axis==="h") cop.vx=-Math.abs(cop.vx);
       }
 
@@ -1420,17 +1888,23 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     }
 
     // Câmeras de vigilância.
+    let cameraSeeing = false;
     for(const camera of cameras){
       camera.seeingPlayer=false;
+      const camSy = screenY(camera.y);
+      if(camSy >= -40 && camSy <= H + 40) camera.everOnScreen = true;
 
       // Rotação 360º: direção definida no spawn e mantida para sempre.
-      if(camera.mode==="rotate"){
+      // Com o tempo parado, o cone também congela.
+      if(camera.mode==="rotate" && timeFreezeTimer<=0){
         camera.face += camera.rotationDir * camera.rotationSpeed * dt;
         camera.face = Math.atan2(Math.sin(camera.face),Math.cos(camera.face));
       }
 
-      if(!alert && pointInCameraVision(camera,player.x,player.y)){
+      if(timeFreezeTimer<=0 && !alert && pointInCameraVision(camera,player.x,player.y)){
         camera.seeingPlayer=true;
+        camera.spottedPlayer=true;
+        cameraSeeing = true;
 
         const d=dist(camera.x,camera.y,player.x,player.y);
         const crowdCover=clamp(density*.13,0,.62);
@@ -1441,6 +1915,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
         seen=true;
       }
     }
+    if(!cameraSeeing) runStats.noCameraTime += dt;
 
     if(idleHunterCop && !alert){
       const hunterScreenY = screenY(idleHunterCop.y);
@@ -1451,6 +1926,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
     if(touchingPolice){
       bustedTimer += dt;
+      runStats.touchedPolice = true;
+      runStats.maxBusted = Math.max(runStats.maxBusted, bustedTimer);
+      if(alert) runMaxBustedInAlert = Math.max(runMaxBustedInAlert, bustedTimer);
 
       if(bustedTimer >= 1.5){
         bustedTimer = 1.5;
@@ -1467,9 +1945,31 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     }
 
     suspicion = clamp(suspicion,0,100);
+    if(suspicion >= 99) runStats.suspicionHit99 = true;
+    if(runStats.suspicionHit99 && suspicion < 50) runStats.suspicionRecovered = true;
+    if(!alert && suspicion <= 50) runStats.suspicionLow50Time += dt;
+    if(!alert && suspicion < 20) runStats.suspicionLow20Time += dt;
+
+    const coverStrength = clamp(density * .13, 0, .62);
+    if(coverStrength >= .2){
+      runStats.crowdCoverTime += dt;
+      runStats.crowdCoverStreak += dt;
+      runStats.crowdCoverStreakMax = Math.max(
+        runStats.crowdCoverStreakMax,
+        runStats.crowdCoverStreak,
+      );
+    }else{
+      runStats.crowdCoverStreak = 0;
+    }
+    if(inventory.length >= 3) runStats.inventoryFull = true;
 
     if(suspicion>=100 && !alert && escapeImmunityTimer<=0){
       alert = true;
+      runStats.alertEver = true;
+      runAlertItemsUsed = 0;
+      runMaxBustedInAlert = 0;
+      runSoapInAlert = false;
+      runDirsInEscape = new Set();
       pursuitEscapeTimer = 0;
       pursuitGraceTimer = .5;
 
@@ -1529,6 +2029,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
             pursuitEscapeTimer = 0;
             pursuitGraceTimer = 0;
             mainPursuer = null;
+            noteEscape(true);
 
             for(const c of cops){
               c.chase = false;
@@ -1553,9 +2054,11 @@ export function createGame({width = 420, height = 780, initialBest = 0,
         if(dist(p.x,p.y,player.x,player.y) > p.r+player.r+3) continue;
 
         inventory.push(p.type);
+        rememberType(runStats.pickedTypes, p.type);
         powerUps.splice(i,1);
         powerPickupFlash=.22;
         powerPickupCooldown=.45;
+        onPowerPickup(p.type);
 
         break;
       }
@@ -1581,22 +2084,32 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       }
     }
 
-    for(let i=cameras.length-1;i>=0;i--) if(cameras[i].y<minY) cameras.splice(i,1);
+    for(let i=cameras.length-1;i>=0;i--){
+      if(cameras[i].y<minY){
+        const cam = cameras[i];
+        if(cam.everOnScreen && !cam.spottedPlayer) runStats.camerasClean += 1;
+        cameras.splice(i,1);
+      }
+    }
     for(let i=decor.length-1;i>=0;i--) if(decor[i].y<minY) decor.splice(i,1);
     for(let i=obstacles.length-1;i>=0;i--) if(obstacles[i].y+obstacles[i].h<minY) obstacles.splice(i,1);
     for(let i=powerUps.length-1;i>=0;i--) if(powerUps[i].y<minY) powerUps.splice(i,1);
+
+    enforceOnScreenActorLimit();
+    enforceOnScreenCameraLimit();
 
 
   }
 
 
 
-  function drawBackground(){
+  function drawBackground(context){
+    if(context) ctx = context;
     ctx.fillStyle="#1f2630";
     ctx.fillRect(0,0,W,H);
 
-    // sidewalk tiles
-    const tile=32;
+    // sidewalk tiles (1 SQM)
+    const tile=SQM;
     const offset = ((cameraY%tile)+tile)%tile;
     ctx.strokeStyle="#2d3642";
     ctx.lineWidth=1;
@@ -1659,12 +2172,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     if(alert && cop.chase){
       // Durante a perseguição, o mesmo cone da lanterna fica branco
       // para ser imediatamente legível pelo jogador.
-      const pursuit = ctx.createRadialGradient(x,y,4,x,y,r);
-      pursuit.addColorStop(0,"rgba(255,255,255,.34)");
-      pursuit.addColorStop(.68,"rgba(255,255,255,.20)");
-      pursuit.addColorStop(1,"rgba(255,255,255,.055)");
-
-      ctx.fillStyle=pursuit;
+      ctx.fillStyle="rgba(255,255,255,.22)";
       ctx.beginPath();
       ctx.moveTo(x,y);
       ctx.arc(x,y,r,a1,a2,false);
@@ -1672,16 +2180,13 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       ctx.fill();
 
     }else{
-      // Feixe normal de patrulha/suspeita.
+      // Feixe normal de patrulha/suspeita (fills sólidos — sem gradiente por frame).
       const p = cop.seeingPlayer ? clamp(suspicion/100, 0, 1) : 0;
       const red = 244;
       const green = Math.round(205 - 145*p);
       const blue = Math.round(72 - 35*p);
 
-      const base = ctx.createRadialGradient(x,y,5,x,y,r);
-      base.addColorStop(0,"rgba(255,224,104,.22)");
-      base.addColorStop(1,"rgba(255,224,104,.025)");
-      ctx.fillStyle=base;
+      ctx.fillStyle="rgba(255,224,104,.20)";
       ctx.beginPath();
       ctx.moveTo(x,y);
       ctx.arc(x,y,r,a1,a2,false);
@@ -1690,11 +2195,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
       if(cop.seeingPlayer && p > 0){
         const chargedR = Math.max(18, r*p);
-        const charged = ctx.createRadialGradient(x,y,3,x,y,chargedR);
-        charged.addColorStop(0,`rgba(${red},${green},${blue},.48)`);
-        charged.addColorStop(.72,`rgba(${red},${green},${blue},.28)`);
-        charged.addColorStop(1,`rgba(${red},${green},${blue},.03)`);
-        ctx.fillStyle=charged;
+        ctx.fillStyle=`rgba(${red},${green},${blue},${.18 + .22 * p})`;
         ctx.beginPath();
         ctx.moveTo(x,y);
         ctx.arc(x,y,chargedR,a1,a2,false);
@@ -1723,50 +2224,50 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function drawPerson(x,sy,tone,police=false,playerChar=false){
-    // pixel body
+    // pixel body (~1.5×, larguras em múltiplos de 8)
     const skin=["#f1c7a2","#c98f66","#8e5e42","#e1aa7d","#6b4937"][tone%5];
 
     // shadow
-    ctx.fillStyle="#0005";ctx.fillRect(Math.round(x-8),Math.round(sy+10),16,5);
+    ctx.fillStyle="#0005";ctx.fillRect(Math.round(x-12),Math.round(sy+16),24,8);
 
     // legs
     ctx.fillStyle=playerChar?"#1f1f24":police?"#18283a":"#26313d";
-    ctx.fillRect(Math.round(x-6),Math.round(sy+3),5,10);
-    ctx.fillRect(Math.round(x+1),Math.round(sy+3),5,10);
+    ctx.fillRect(Math.round(x-10),Math.round(sy+4),8,16);
+    ctx.fillRect(Math.round(x+2),Math.round(sy+4),8,16);
 
     // torso
     if(playerChar){
       // roupa listrada de bandido
       ctx.fillStyle="#f4f4f4";
-      ctx.fillRect(Math.round(x-7),Math.round(sy-8),14,13);
+      ctx.fillRect(Math.round(x-12),Math.round(sy-12),24,20);
       ctx.fillStyle="#111";
-      ctx.fillRect(Math.round(x-7),Math.round(sy-8),14,2);
-      ctx.fillRect(Math.round(x-7),Math.round(sy-4),14,2);
-      ctx.fillRect(Math.round(x-7),Math.round(sy),14,2);
-      ctx.fillRect(Math.round(x-7),Math.round(sy+4),14,1);
+      ctx.fillRect(Math.round(x-12),Math.round(sy-12),24,3);
+      ctx.fillRect(Math.round(x-12),Math.round(sy-6),24,3);
+      ctx.fillRect(Math.round(x-12),Math.round(sy),24,3);
+      ctx.fillRect(Math.round(x-12),Math.round(sy+6),24,2);
       // listras verticais sutis para lembrar uniforme clássico
-      ctx.fillRect(Math.round(x-4),Math.round(sy-8),2,13);
-      ctx.fillRect(Math.round(x+1),Math.round(sy-8),2,13);
+      ctx.fillRect(Math.round(x-6),Math.round(sy-12),3,20);
+      ctx.fillRect(Math.round(x+2),Math.round(sy-12),3,20);
     }else{
       ctx.fillStyle=police?"#3e79a8":["#6f8f5a","#9e5f79","#8a774e","#5b7c9e","#795b9b"][tone%5];
-      ctx.fillRect(Math.round(x-7),Math.round(sy-8),14,13);
+      ctx.fillRect(Math.round(x-12),Math.round(sy-12),24,20);
     }
 
     // head
     ctx.fillStyle=skin;
-    ctx.fillRect(Math.round(x-5),Math.round(sy-17),10,9);
+    ctx.fillRect(Math.round(x-8),Math.round(sy-24),16,12);
 
     // hair/hat
     if(playerChar){
       // gorrinho/boina escura
       ctx.fillStyle="#111";
-      ctx.fillRect(Math.round(x-6),Math.round(sy-20),12,4);
-      ctx.fillRect(Math.round(x-4),Math.round(sy-17),8,1);
+      ctx.fillRect(Math.round(x-10),Math.round(sy-32),20,8);
+      ctx.fillRect(Math.round(x-6),Math.round(sy-24),12,2);
     }else{
       ctx.fillStyle=police?"#1e3045":"#3a3029";
-      ctx.fillRect(Math.round(x-5),Math.round(sy-19),10,3);
+      ctx.fillRect(Math.round(x-8),Math.round(sy-28),16,4);
       if(police){
-        ctx.fillStyle="#6ca1cc";ctx.fillRect(Math.round(x-7),Math.round(sy-21),14,3);
+        ctx.fillStyle="#6ca1cc";ctx.fillRect(Math.round(x-12),Math.round(sy-32),24,4);
       }
     }
   }
@@ -1852,12 +2353,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
     ctx.save();
 
-    const base=ctx.createRadialGradient(x,y,4,x,y,r);
-    base.addColorStop(0,"rgba(95,190,255,.24)");
-    base.addColorStop(.72,"rgba(95,190,255,.12)");
-    base.addColorStop(1,"rgba(95,190,255,.025)");
-
-    ctx.fillStyle=base;
+    ctx.fillStyle="rgba(95,190,255,.16)";
     ctx.beginPath();
     ctx.moveTo(x,y);
     ctx.arc(x,y,r,a1,a2,false);
@@ -1870,12 +2366,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       const green=Math.round(195-125*p);
       const blue=Math.round(75-30*p);
 
-      const charged=ctx.createRadialGradient(x,y,3,x,y,chargedR);
-      charged.addColorStop(0,`rgba(${red},${green},${blue},.46)`);
-      charged.addColorStop(.72,`rgba(${red},${green},${blue},.24)`);
-      charged.addColorStop(1,`rgba(${red},${green},${blue},.025)`);
-
-      ctx.fillStyle=charged;
+      ctx.fillStyle=`rgba(${red},${green},${blue},${.16 + .2 * p})`;
       ctx.beginPath();
       ctx.moveTo(x,y);
       ctx.arc(x,y,chargedR,a1,a2,false);
@@ -2084,14 +2575,14 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       // Glow/placa coletável.
       ctx.fillStyle=inventoryFull ? "#666" : def.color+"33";
       ctx.beginPath();
-      ctx.arc(0,0,18,0,Math.PI*2);
+      ctx.arc(0,0,24,0,Math.PI*2);
       ctx.fill();
 
       ctx.fillStyle="#0b1020";
-      ctx.fillRect(-13,-13,26,26);
+      ctx.fillRect(-16,-16,32,32);
       ctx.strokeStyle=inventoryFull ? "#888" : def.color;
       ctx.lineWidth=2;
-      ctx.strokeRect(-13,-13,26,26);
+      ctx.strokeRect(-16,-16,32,32);
 
       // Mesmo ícone vetorial usado no inventário da UI.
       ctx.save();
@@ -2107,10 +2598,10 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       if(inventoryFull){
         ctx.filter="none";
         ctx.fillStyle="rgba(15,18,24,.88)";
-        ctx.fillRect(-15,15,30,10);
+        ctx.fillRect(-16,16,32,10);
         ctx.fillStyle="#b8bec8";
         ctx.font="900 7px ui-monospace, monospace";
-        ctx.fillText("CHEIO",0,20);
+        ctx.fillText("CHEIO",0,24);
       }
 
       ctx.restore();
@@ -2118,10 +2609,18 @@ export function createGame({width = 420, height = 780, initialBest = 0,
   }
 
   function drawNPCs(){
+    const soapActive = soapTimer > 0;
     for(const npc of npcs){
       const sy=screenY(npc.y);
       if(sy<-40||sy>H+40) continue;
-      drawPerson(npc.x,sy,npc.tone,false,false);
+      if(soapActive){
+        ctx.save();
+        ctx.globalAlpha = .42;
+        drawPerson(npc.x,sy,npc.tone,false,false);
+        ctx.restore();
+      }else{
+        drawPerson(npc.x,sy,npc.tone,false,false);
+      }
     }
   }
 
@@ -2148,13 +2647,13 @@ export function createGame({width = 420, height = 780, initialBest = 0,
         const strobeColor = strobeBlue ? "#3f7cff" : "#ff3f4f";
         ctx.strokeStyle=strobeColor;
         ctx.lineWidth=3;
-        ctx.beginPath();ctx.arc(cop.x,sy-3,17,0,Math.PI*2);ctx.stroke();
+        ctx.beginPath();ctx.arc(cop.x,sy-3,24,0,Math.PI*2);ctx.stroke();
 
         // Pequenos flashes laterais simulando giroflex.
         ctx.fillStyle=strobeBlue ? "#3f7cff" : "#ff3f4f";
-        ctx.fillRect(Math.round(cop.x-12),Math.round(sy-26),8,4);
+        ctx.fillRect(Math.round(cop.x-16),Math.round(sy-40),8,4);
         ctx.fillStyle=strobeBlue ? "#ff3f4f" : "#3f7cff";
-        ctx.fillRect(Math.round(cop.x+4),Math.round(sy-26),8,4);
+        ctx.fillRect(Math.round(cop.x+8),Math.round(sy-40),8,4);
       }
       if(cop === idleHunterCop && !alert && playerIdleTimer >= 3){
         ctx.save();
@@ -2162,9 +2661,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
         ctx.textAlign="center";
         ctx.lineWidth=3;
         ctx.strokeStyle="rgba(0,0,0,.7)";
-        ctx.strokeText("!",cop.x,sy-31);
+        ctx.strokeText("!",cop.x,sy-48);
         ctx.fillStyle="#ffd45a";
-        ctx.fillText("!",cop.x,sy-31);
+        ctx.fillText("!",cop.x,sy-48);
         ctx.restore();
       }
 
@@ -2172,8 +2671,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
       // facing marker
       ctx.fillStyle=alert?"#ff4444":"#f3cf55";
-      const fx=Math.cos(cop.face)*12;
-      const fy=-Math.sin(cop.face)*12;
+      const fx=Math.cos(cop.face)*16;
+      const fy=-Math.sin(cop.face)*16;
       ctx.fillRect(Math.round(cop.x+fx-2),Math.round(sy+fy-2),4,4);
     }
   }
@@ -2194,21 +2693,21 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     ctx.strokeStyle = "rgba(255,232,92,.95)";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(player.x, sy-3, 21 + pulse*11, 0, Math.PI*2);
+    ctx.arc(player.x, sy-3, 24 + pulse*8, 0, Math.PI*2);
     ctx.stroke();
 
     ctx.strokeStyle = "rgba(255,255,255,.72)";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(player.x, sy-3, 31 + pulse2*10, 0, Math.PI*2);
+    ctx.arc(player.x, sy-3, 32 + pulse2*8, 0, Math.PI*2);
     ctx.stroke();
 
     // Seta animada acima do player.
     const bob = Math.sin(age*9)*4;
-    const arrowY = sy - 54 + bob;
+    const arrowY = sy - 64 + bob;
     ctx.fillStyle = "#ffe75c";
     ctx.beginPath();
-    ctx.moveTo(player.x, arrowY + 12);
+    ctx.moveTo(player.x, arrowY + 16);
     ctx.lineTo(player.x - 8, arrowY);
     ctx.lineTo(player.x + 8, arrowY);
     ctx.closePath();
@@ -2220,9 +2719,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     ctx.textBaseline = "bottom";
     ctx.lineWidth = 4;
     ctx.strokeStyle = "rgba(0,0,0,.72)";
-    ctx.strokeText("VOCÊ", player.x, arrowY - 5);
+    ctx.strokeText("VOCÊ", player.x, arrowY - 8);
     ctx.fillStyle = "#fff7b0";
-    ctx.fillText("VOCÊ", player.x, arrowY - 5);
+    ctx.fillText("VOCÊ", player.x, arrowY - 8);
 
     ctx.restore();
   }
@@ -2240,7 +2739,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
     if(shieldPulseTimer>0){
       const progress=1-shieldPulseTimer/.45;
-      const radius=25+progress*125;
+      const radius=24+progress*128;
       ctx.save();
       ctx.globalAlpha=1-progress;
       ctx.strokeStyle="#79aaff";
@@ -2257,7 +2756,7 @@ export function createGame({width = 420, height = 780, initialBest = 0,
       ctx.strokeStyle="#fff6a8";
       ctx.lineWidth=3;
       ctx.beginPath();
-      ctx.arc(player.x,sy-3,24+(1-powerPickupFlash/.22)*18,0,Math.PI*2);
+      ctx.arc(player.x,sy-3,24+(1-powerPickupFlash/.22)*16,0,Math.PI*2);
       ctx.stroke();
       ctx.restore();
     }
@@ -2265,9 +2764,9 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     // marker permanente discreto
     ctx.fillStyle=alert?"#ff4c4c":"#fff";
     ctx.beginPath();
-    ctx.moveTo(player.x,sy-31);
-    ctx.lineTo(player.x-5,sy-39);
-    ctx.lineTo(player.x+5,sy-39);
+    ctx.moveTo(player.x,sy-40);
+    ctx.lineTo(player.x-8,sy-48);
+    ctx.lineTo(player.x+8,sy-48);
     ctx.closePath();ctx.fill();
   }
 
@@ -2283,9 +2782,12 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     ctx.globalAlpha=1;
   }
 
-  function draw(context){
+  function backgroundKey(){
+    return Math.floor(cameraY / 32);
+  }
+
+  function drawForeground(context){
     ctx = context;
-    drawBackground();
     drawDecor();
     for(const cop of cops) drawCone(cop);
     drawCameraCones();
@@ -2335,17 +2837,30 @@ export function createGame({width = 420, height = 780, initialBest = 0,
     }
   }
 
+  function draw(context){
+    ctx = context;
+    drawBackground();
+    drawForeground(context);
+  }
+
 
 
   function snapshot(){
     return {
       width: W, height: H, started, paused, gameOver, reason, difficulty,
+      allowsPause: allowsPause(),
       elapsed, time: fmt(elapsed), best, bestTime: fmt(best),
       distance: distanceMeters(), screenDistance: screenDistanceMeters(),
       distanceLabel: fmtDistance(distanceMeters()), screenDistanceLabel: fmtDistance(screenDistanceMeters()),
       suspicion, alert, bustedTimer, pursuitEscapeTimer, pursuitGraceTimer,
       escapeTarget: pursuitEscapeTarget(),
       inventory: [...inventory],
+      runStats: {
+        ...runStats,
+        dirsInEscape: [...runStats.dirsInEscape],
+        pickedTypes: [...runStats.pickedTypes],
+        usedTypes: [...runStats.usedTypes],
+      },
       player: {x: player.x, y: player.y}, cameraY,
       effects: [
         ["IMUNE", escapeImmunityTimer, "#f6d64a"],
@@ -2360,7 +2875,8 @@ export function createGame({width = 420, height = 780, initialBest = 0,
 
   reset();
   return {
-    start, setPaused, togglePause, usePowerUp, draw, snapshot,
+    start, setPaused, togglePause, usePowerUp, draw, drawBackground, drawForeground,
+    backgroundKey, snapshot, allowsPause,
     isPlaying: () => started && !paused && !gameOver,
     describeDifficulty: difficultyDescription,
     powers: POWER_TYPES,

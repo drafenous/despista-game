@@ -1,7 +1,8 @@
 import React, { useRef, type ReactNode } from 'react';
 import { View, type GestureResponderEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { uiLog } from '../debug/uiLog';
 
-/** Raw touches keep each inventory slot independent of the joystick's finger. */
+/** Raw touches keep each inventory slot independent when the finger starts on the slot. */
 export function PowerUpButton({ disabled, label, onActivate, style, children }: {
   disabled: boolean;
   label: string;
@@ -10,12 +11,22 @@ export function PowerUpButton({ disabled, label, onActivate, style, children }: 
   children: ReactNode;
 }) {
   const touch = useRef<string | null>(null);
-  const activate = () => { if (!disabled) onActivate(); };
+  const activate = () => {
+    uiLog('powerup', disabled ? 'press-disabled' : 'activate', { label });
+    if (!disabled) onActivate();
+  };
   const start = (event: GestureResponderEvent) => {
     if (touch.current !== null) return;
     const point = event.nativeEvent.changedTouches[0];
     if (!point) return;
     touch.current = String(point.identifier);
+    uiLog('powerup', 'press', {
+      label,
+      disabled,
+      x: Math.round(point.pageX),
+      y: Math.round(point.pageY),
+      touches: event.nativeEvent.touches.length,
+    });
     activate();
   };
   const end = (event: GestureResponderEvent) => {

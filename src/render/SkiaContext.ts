@@ -1,19 +1,63 @@
 import { Platform } from 'react-native';
 import { matchFont, Skia, PaintStyle, StrokeCap, StrokeJoin, TileMode,
-  type SkCanvas, type SkPathBuilder, type SkFont } from '@shopify/react-native-skia';
+  type SkCanvas, type SkPathBuilder, type SkFont, type SkColorFilter } from '@shopify/react-native-skia';
 
 const fonts = new Map<number, SkFont>();
+const colorCache = new Map<string, Float32Array>();
+const GRAYSCALE_MATRIX = [
+  .2126, .7152, .0722, 0, 0,
+  .2126, .7152, .0722, 0, 0,
+  .2126, .7152, .0722, 0, 0,
+  0, 0, 0, 1, 0,
+];
+let grayscaleFilter: SkColorFilter | null = null;
+
+function cachedColor(style: string): Float32Array {
+  let color = colorCache.get(style);
+  if (!color) {
+    color = Skia.Color(style);
+    colorCache.set(style, color);
+  }
+  return color;
+}
+
+function getGrayscaleFilter(): SkColorFilter {
+  if (!grayscaleFilter) grayscaleFilter = Skia.ColorFilter.MakeMatrix(GRAYSCALE_MATRIX);
+  return grayscaleFilter;
+}
 
 class RadialGradient {
   stops: { offset: number; color: string }[] = [];
+  stopColors: Float32Array[] = [];
+  stopPositions: number[] = [];
+  private prepared = false;
   constructor(public x: number, public y: number, public inner: number, public outer: number) {}
-  addColorStop(offset: number, color: string) { this.stops.push({ offset, color }); }
+  addColorStop(offset: number, color: string) {
+    this.stops.push({ offset, color });
+    this.prepared = false;
+  }
+  prepare() {
+    if (this.prepared) return;
+    const sorted = this.stops.length > 1
+      ? [...this.stops].sort((a, b) => a.offset - b.offset)
+      : this.stops;
+    this.stopColors = sorted.map(s => cachedColor(s.color));
+    const denom = this.outer || 1;
+    this.stopPositions = sorted.map(s => (this.inner + s.offset * (this.outer - this.inner)) / denom);
+    this.prepared = true;
+  }
 }
 type Style = string | RadialGradient;
 type DrawingState = {
   fillStyle: Style; strokeStyle: Style; globalAlpha: number; lineWidth: number;
   lineCap: string; lineJoin: string; font: string; textAlign: string;
   textBaseline: string; filter: string; dash: number[];
+};
+
+const DEFAULT_STATE: DrawingState = {
+  fillStyle: '#000', strokeStyle: '#000', globalAlpha: 1, lineWidth: 1,
+  lineCap: 'butt', lineJoin: 'miter', font: '12px monospace',
+  textAlign: 'start', textBaseline: 'alphabetic', filter: 'none', dash: [],
 };
 
 /** The subset of Canvas 2D used by the original artwork, backed entirely by Skia.
@@ -35,26 +79,49 @@ export class SkiaContext implements DrawingState {
   private path: SkPathBuilder = Skia.PathBuilder.Make();
   private reusablePaint = Skia.Paint();
   private hasPoint = false;
+  private canvas: SkCanvas | null = null;
 
-  constructor(private canvas: SkCanvas) {}
+  constructor(canvas?: SkCanvas) {
+    if (canvas) this.canvas = canvas;
+  }
+
+  attach(canvas: SkCanvas) {
+    this.canvas = canvas;
+    Object.assign(this, DEFAULT_STATE);
+    this.dash = [];
+    this.stack.length = 0;
+    this.path.reset();
+    this.hasPoint = false;
+  }
+
+  detach() {
+    this.canvas = null;
+    this.stack.length = 0;
+  }
+
   save() {
     this.stack.push({
       fillStyle: this.fillStyle, strokeStyle: this.strokeStyle, globalAlpha: this.globalAlpha,
       lineWidth: this.lineWidth, lineCap: this.lineCap, lineJoin: this.lineJoin,
       font: this.font, textAlign: this.textAlign, textBaseline: this.textBaseline,
-      filter: this.filter, dash: [...this.dash],
+      filter: this.filter, dash: this.dash.length ? [...this.dash] : [],
     });
-    this.canvas.save();
+    this.canvas!.save();
   }
   restore() {
     const state = this.stack.pop();
-    if (state) { Object.assign(this, state); this.canvas.restore(); }
+    if (state) { Object.assign(this, state); this.canvas!.restore(); }
   }
-  translate(x: number, y: number) { this.canvas.translate(x, y); }
-  rotate(radians: number) { this.canvas.rotate(radians * 180 / Math.PI, 0, 0); }
-  scale(x: number, y: number) { this.canvas.scale(x, y); }
+  translate(x: number, y: number) { this.canvas!.translate(x, y); }
+  rotate(radians: number) { this.canvas!.rotate(radians * 180 / Math.PI, 0, 0); }
+  scale(x: number, y: number) { this.canvas!.scale(x, y); }
   setLineDash(values: number[]) { this.dash = values; }
-  dispose() { this.path.dispose(); this.reusablePaint.dispose(); }
+  dispose() {
+    this.path.dispose();
+    this.reusablePaint.dispose();
+    this.canvas = null;
+    this.stack.length = 0;
+  }
   beginPath() { this.path.reset(); this.hasPoint = false; }
   moveTo(x: number, y: number) { this.path.moveTo(x, y); this.hasPoint = true; }
   lineTo(x: number, y: number) { this.path.lineTo(x, y); this.hasPoint = true; }
@@ -102,16 +169,16 @@ export class SkiaContext implements DrawingState {
     p.setStrokeJoin(this.lineJoin === 'round' ? StrokeJoin.Round : StrokeJoin.Miter);
     const style = stroke ? this.strokeStyle : this.fillStyle;
     if (typeof style === 'string') {
-      const color = Skia.Color(style);
-      // setAlphaf replaces alpha; multiply the source alpha instead of losing it.
-      color[3] *= this.globalAlpha;
+      const color = cachedColor(style);
       p.setColor(color);
+      // setAlphaf replaces alpha; multiply the source alpha instead of losing it.
+      if (this.globalAlpha !== 1) p.setAlphaf(color[3] * this.globalAlpha);
     } else {
-      const stops = [...style.stops].sort((a, b) => a.offset - b.offset);
+      style.prepare();
       const shader = Skia.Shader.MakeRadialGradient(
         { x: style.x, y: style.y }, style.outer,
-        stops.map(s => Skia.Color(s.color)),
-        stops.map(s => (style.inner + s.offset * (style.outer - style.inner)) / style.outer),
+        style.stopColors,
+        style.stopPositions,
         TileMode.Clamp);
       p.setShader(shader); shader.dispose();
       p.setAlphaf(this.globalAlpha);
@@ -120,10 +187,7 @@ export class SkiaContext implements DrawingState {
       const effect = Skia.PathEffect.MakeDash(this.dash, 0);
       p.setPathEffect(effect); effect?.dispose();
     }
-    if (this.filter === 'grayscale(1)') { const filter = Skia.ColorFilter.MakeMatrix([
-      .2126,.7152,.0722,0,0, .2126,.7152,.0722,0,0,
-      .2126,.7152,.0722,0,0, 0,0,0,1,0,
-    ]); p.setColorFilter(filter); filter.dispose(); }
+    if (this.filter === 'grayscale(1)') p.setColorFilter(getGrayscaleFilter());
     return p;
   }
   private drawPath(stroke: boolean) {
@@ -131,7 +195,7 @@ export class SkiaContext implements DrawingState {
     // build() preserves the builder so fill() can be followed by stroke().
     const path = this.path.build();
     try {
-      this.canvas.drawPath(path, p);
+      this.canvas!.drawPath(path, p);
     } finally {
       path.dispose();
     }
@@ -139,10 +203,10 @@ export class SkiaContext implements DrawingState {
   fill() { this.drawPath(false); }
   stroke() { this.drawPath(true); }
   fillRect(x: number, y: number, w: number, h: number) {
-    const p = this.paint(false); this.canvas.drawRect(Skia.XYWHRect(x, y, w, h), p);
+    const p = this.paint(false); this.canvas!.drawRect(Skia.XYWHRect(x, y, w, h), p);
   }
   strokeRect(x: number, y: number, w: number, h: number) {
-    const p = this.paint(true); this.canvas.drawRect(Skia.XYWHRect(x, y, w, h), p);
+    const p = this.paint(true); this.canvas!.drawRect(Skia.XYWHRect(x, y, w, h), p);
   }
   private text(text: string, x: number, y: number, stroke: boolean) {
     const size = Number(/([\d.]+)px/.exec(this.font)?.[1] ?? 12);
@@ -158,7 +222,7 @@ export class SkiaContext implements DrawingState {
     if (this.textBaseline === 'middle') y -= (metrics.ascent + metrics.descent) / 2;
     else if (this.textBaseline === 'top') y -= metrics.ascent;
     else if (this.textBaseline === 'bottom') y -= metrics.descent;
-    const p = this.paint(stroke); this.canvas.drawText(text, x, y, p, font);
+    const p = this.paint(stroke); this.canvas!.drawText(text, x, y, p, font);
   }
   fillText(text: string, x: number, y: number) { this.text(text, x, y, false); }
   strokeText(text: string, x: number, y: number) { this.text(text, x, y, true); }

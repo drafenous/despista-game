@@ -35,13 +35,13 @@ async function main() {
     return (seed >>> 0) / 4294967296;
   }});
   game.start('impossible');
-  const surface=Skia.Surface.Make(420,780);
+  const surface=Skia.Surface.Make(360,640);
   assert.ok(surface);
   const startedAt = performance.now();
   for(let frame=0;frame<120;frame++) {
     game.setInput(0,-1);game.step(1/60);
     const recorder=Skia.PictureRecorder();
-    const canvas=recorder.beginRecording(Skia.XYWHRect(0,0,420,780));
+    const canvas=recorder.beginRecording(Skia.XYWHRect(0,0,360,640));
     const ctx=new SkiaContext(canvas);game.draw(ctx);ctx.dispose();
     const picture=recorder.finishRecordingAsPicture();
     surface.getCanvas().drawPicture(picture);surface.flush();
