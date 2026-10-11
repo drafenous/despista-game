@@ -17,7 +17,7 @@ func _read_json(path: String, fallback: Variant) -> Variant:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return fallback
-	var parsed := JSON.parse_string(file.get_as_text())
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	return fallback if parsed == null else parsed
 
 func _write_json(path: String, value: Variant) -> bool:

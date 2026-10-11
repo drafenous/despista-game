@@ -35,25 +35,36 @@ jobs:
 
       - name: Import and parse project
         shell: bash
-        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --editor --quit-after 5
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --editor --quit-after 5 2>&1 | tee /tmp/godot-import.log
+          ! grep -E "SCRIPT ERROR:|Failed to load script|Failed to (instantiate|create) an autoload" /tmp/godot-import.log
 
       - name: Smoke-run main scene
         shell: bash
-        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --quit-after 3
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --quit-after 3 2>&1 | tee /tmp/godot-smoke.log
+          ! grep -E "SCRIPT ERROR:|Failed to load script|Failed to (instantiate|create) an autoload" /tmp/godot-smoke.log
 
       - name: Run gameplay tests
         shell: bash
-        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_game_engine.gd
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_game_engine.gd 2>&1 | tee /tmp/godot-game.log
+          ! grep -E "SCRIPT ERROR:|Failed to load script" /tmp/godot-game.log
 
       - name: Run achievement tests
         shell: bash
-        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_achievements.gd
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_achievements.gd 2>&1 | tee /tmp/godot-achievements.log
+          ! grep -E "SCRIPT ERROR:|Failed to load script" /tmp/godot-achievements.log
 
       - name: Run multitouch control tests
         shell: bash
-        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_controls.gd
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_controls.gd 2>&1 | tee /tmp/godot-controls.log
+          ! grep -E "SCRIPT ERROR:|Failed to load script" /tmp/godot-controls.log
 
       - name: Run persistence tests
         shell: bash
-        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_persistence.gd
-
+        run: |
+          Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_persistence.gd 2>&1 | tee /tmp/godot-persistence.log
+          ! grep -E "SCRIPT ERROR:|Failed to load script" /tmp/godot-persistence.log

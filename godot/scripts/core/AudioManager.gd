@@ -12,9 +12,9 @@ func _ready() -> void:
 	add_child(chase_player)
 	add_child(pickup_player)
 	add_child(use_player)
-	chase_player.stream = preload("res://assets/sounds/chase-alert.mp3")
-	pickup_player.stream = preload("res://assets/sounds/power-pickup.mp3")
-	use_player.stream = preload("res://assets/sounds/power-use.mp3")
+	chase_player.stream = load("res://assets/sounds/chase-alert.mp3") as AudioStream
+	pickup_player.stream = load("res://assets/sounds/power-pickup.mp3") as AudioStream
+	use_player.stream = load("res://assets/sounds/power-use.mp3") as AudioStream
 	chase_player.volume_db = -13.0
 	pickup_player.volume_db = -9.0
 	use_player.volume_db = -9.0

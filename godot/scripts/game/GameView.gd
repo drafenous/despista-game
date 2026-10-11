@@ -40,7 +40,7 @@ func _draw_decor() -> void:
 		var sy := game.screen_y(float(item.y))
 		if sy < -20 or sy > GameEngine.H + 20:
 			continue
-		var color := [Color("#3e5c45"), Color("#635444"), Color("#374e63"), Color("#4e455e")][int(item.kind) % 4]
+		var color: Color = [Color("#3e5c45"), Color("#635444"), Color("#374e63"), Color("#4e455e")][int(item.kind) % 4]
 		draw_rect(Rect2(float(item.x) - 2, sy - 2, 4, 4), color)
 
 func _draw_cop_cones() -> void:
@@ -168,7 +168,7 @@ func _draw_player() -> void:
 	draw_colored_polygon(marker, Color("#ff4c4c") if game.alert else Color.WHITE)
 
 func _draw_person(pos: Vector2, tone: int, police: bool, player_char: bool, alpha: float = 1.0) -> void:
-	var skin := [Color("#f1c7a2"),Color("#c98f66"),Color("#8e5e42"),Color("#e1aa7d"),Color("#6b4937")][tone % 5]
+	var skin: Color = [Color("#f1c7a2"),Color("#c98f66"),Color("#8e5e42"),Color("#e1aa7d"),Color("#6b4937")][tone % 5]
 	skin.a *= alpha
 	var dark := Color("#18283a") if police else Color("#26313d")
 	dark.a *= alpha
@@ -184,7 +184,7 @@ func _draw_person(pos: Vector2, tone: int, police: bool, player_char: bool, alph
 		draw_rect(Rect2(pos + Vector2(-6,-12), Vector2(3,20)), black)
 		draw_rect(Rect2(pos + Vector2(2,-12), Vector2(3,20)), black)
 	else:
-		var body := Color("#3e79a8") if police else [Color("#6f8f5a"),Color("#9e5f79"),Color("#8a774e"),Color("#5b7c9e"),Color("#795b9b")][tone % 5]
+		var body: Color = Color("#3e79a8") if police else [Color("#6f8f5a"),Color("#9e5f79"),Color("#8a774e"),Color("#5b7c9e"),Color("#795b9b")][tone % 5]
 		body.a *= alpha
 		draw_rect(Rect2(pos + Vector2(-12,-12), Vector2(24,20)), body)
 	draw_rect(Rect2(pos + Vector2(-8,-24), Vector2(16,12)), skin)

@@ -86,7 +86,7 @@ func list_items() -> Array[Dictionary]:
 		var id := str(definition.id)
 		var item := definition.duplicate(true)
 		var value := int(progress.values.get(id, 0))
-		var unlocked := progress.unlocked_at.has(id)
+		var unlocked: bool = progress.unlocked_at.has(id)
 		item.value = mini(int(definition.target), value)
 		item.unlocked = unlocked
 		item.unlocked_at = progress.unlocked_at.get(id, 0)

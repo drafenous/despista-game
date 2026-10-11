@@ -18,7 +18,7 @@ func _init() -> void:
 	_check(saver.save_run(game.export_state()), "SaveManager deve gravar a run em JSON")
 	_check(saver.has_run(), "Run gravada deve ser detectável")
 
-	var serialized := saver.load_run()
+	var serialized: Dictionary = saver.load_run()
 	_check(not serialized.is_empty(), "Run serializada deve poder ser lida")
 
 	var restored := GameEngine.new(999)

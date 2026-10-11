@@ -854,7 +854,7 @@ func _spawn_chunk(start_y: float, chunk_h: float) -> void:
 
 func _spawn_obstacle(start_y: float, chunk_h: float) -> void:
 	for _attempt in range(12):
-		var type := ["bench", "trash", "planter", "barrier", "crate"][rng.randi_range(0, 4)]
+		var type: String = str(["bench", "trash", "planter", "barrier", "crate"][rng.randi_range(0, 4)])
 		var size := _obstacle_size(type)
 		var x := rng.randf_range(18.0, W - size.x - 18.0)
 		var y := start_y + rng.randf_range(24.0, chunk_h - size.y - 24.0)
@@ -951,7 +951,7 @@ func _spawn_camera(start_y: float, chunk_h: float) -> void:
 		var y := start_y + rng.randf_range(35.0, chunk_h - 35.0)
 		if _inside_spawn_safe_zone(x, y, 85.0):
 			continue
-		var mode := ["fixed1", "fixed2", "sweep", "rotate"][rng.randi_range(0, 3)]
+		var mode: String = str(["fixed1", "fixed2", "sweep", "rotate"][rng.randi_range(0, 3)])
 		var face := float(rng.randi_range(0, 3)) * PI * 0.5
 		cameras.append({
 			"id": _take_id(),
@@ -1025,7 +1025,7 @@ func _refill_power_bag() -> void:
 func _next_power_type() -> String:
 	if power_bag.is_empty():
 		_refill_power_bag()
-	var type := power_bag.pop_front()
+	var type: String = str(power_bag.pop_front())
 	last_power_type = type
 	return type
 
