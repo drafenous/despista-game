@@ -84,6 +84,47 @@ test('pause freezes simulation, rejects items, and clears stale movement on rest
   game.setPaused(false); game.start(); game.step(1/60);
   assert.equal(game.snapshot().player.x,180);
 });
+test('all five difficulties expose their core rules', () => {
+  const expected = {
+    easy:       { pause: true,  escapeTarget: 3,        autoScroll: false, permanent: false },
+    medium:     { pause: true,  escapeTarget: 3,        autoScroll: false, permanent: false },
+    hard:       { pause: false, escapeTarget: 4,        autoScroll: true,  permanent: false },
+    pro:        { pause: false, escapeTarget: 4,        autoScroll: true,  permanent: false },
+    impossible: { pause: false, escapeTarget: Infinity, autoScroll: true,  permanent: true },
+  };
+
+  for (const [mode, rule] of Object.entries(expected)) {
+    const game = makeGame();
+    game.start(mode);
+    const before = game.snapshot();
+
+    assert.equal(before.difficulty, mode);
+    assert.equal(game.allowsPause(), rule.pause);
+    assert.equal(before.allowsPause, rule.pause);
+    assert.equal(before.escapeTarget, rule.escapeTarget);
+    assert.equal(before.alert, rule.permanent);
+    assert.equal(before.suspicion, rule.permanent ? 100 : 0);
+
+    game.fixture(({ cops, npcs, obstacles, cameras }) => {
+      cops.length = npcs.length = obstacles.length = cameras.length = 0;
+    });
+    for (let i = 0; i < 30; i++) game.step(1 / 60);
+
+    const after = game.snapshot();
+    if (rule.autoScroll) assert.ok(after.cameraY > before.cameraY, mode + ' should auto-scroll');
+    else assert.equal(after.cameraY, before.cameraY, mode + ' should not auto-scroll');
+  }
+});
+
+test('difficulty descriptions stay aligned with gameplay rules', () => {
+  const game = makeGame();
+  assert.match(game.describeDifficulty('easy'), /20% menos NPCs/);
+  assert.match(game.describeDifficulty('medium'), /canto inferior/);
+  assert.match(game.describeDifficulty('hard'), /tela sobe automaticamente/);
+  assert.match(game.describeDifficulty('pro'), /10% mais policiais/);
+  assert.match(game.describeDifficulty('impossible'), /perseguição é permanente/);
+});
+
 test('hard and above refuse pause from API and keep simulation running', () => {
   for (const mode of ['hard', 'pro', 'impossible']) {
     const game = makeGame(); game.start(mode);
