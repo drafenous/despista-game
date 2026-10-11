@@ -31,6 +31,7 @@ import {
 import { toLiveSnapshot } from './src/achievements/live';
 import { loadBest, saveBest } from './src/storage/records';
 import { loadSettings, saveSettings } from './src/storage/settings';
+import { clearRun, loadRun, saveRun } from './src/storage/run';
 import { uiLog } from './src/debug/uiLog';
 
 function Button({ children, onPress, secondary = false, disabled = false }: {
@@ -147,6 +148,7 @@ function Despista() {
     }
     if (snap.gameOver && !endedRunRef.current) {
       endedRunRef.current = true;
+      clearRun().catch(() => {});
       const result = trackerRef.current.dispatch({ type: 'run_end', snap: live });
       persistAchievements(result.progress);
       showUnlocks(result.newlyUnlocked.map(item => item.name));
@@ -182,12 +184,13 @@ function Despista() {
 
   useEffect(() => {
     mounted.current = true;
-    Promise.all([loadBest(), loadSettings(), loadAchievementProgress()]).then(([best, loaded, achievements]) => {
+    Promise.all([loadBest(), loadSettings(), loadAchievementProgress(), loadRun()]).then(([best, loaded, achievements, savedRun]) => {
       if (!mounted.current) return;
       game.setBest(best);
       setSettings(loaded);
       trackerRef.current.dispatch({ type: 'hydrate', progress: achievements });
       setAchievementTick(value => value + 1);
+      if (savedRun && game.importState(savedRun)) setDifficulty(game.snapshot().difficulty);
       refresh();
     }).catch(() => {
       if (mounted.current) setStorageError('Recorde, opções ou conquistas indisponíveis. Você pode jogar normalmente.');
@@ -195,7 +198,17 @@ function Despista() {
       if (mounted.current) setReady(true);
     });
     const appState = AppState.addEventListener('change', state => {
-      if (state !== 'active' && game.allowsPause()) { game.setPaused(true); refresh(); }
+      if (state !== 'active') {
+        const current = game.snapshot();
+        if (current.started && !current.gameOver) {
+          clearInputs();
+          game.setSuspended(true);
+          saveRun(game.exportState()).catch(() => {
+            if (mounted.current) setStorageError('Não foi possível salvar a partida atual.');
+          });
+          refresh();
+        }
+      }
     });
     const back = BackHandler.addEventListener('hardwareBackPress', () => {
       if (showAchievements) { setShowAchievements(false); return true; }
@@ -210,19 +223,21 @@ function Despista() {
       back.remove();
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
-  }, [game, refresh, showOptions, showAchievements]);
+  }, [game, refresh, showOptions, showAchievements, clearInputs]);
 
   const start = () => {
     uiLog('menu', 'start', { difficulty });
     clearInputs();
     endedRunRef.current = false;
     game.start(difficulty);
+    clearRun().catch(() => {});
     refresh();
   };
   const paused = snapshot.paused;
+  const suspended = snapshot.suspended;
   const menu = !snapshot.started || snapshot.gameOver;
   void achievementTick;
-  const active = snapshot.started && !paused;
+  const active = snapshot.started && !paused && !suspended;
   useChaseAlertSound({
     active,
     alert: snapshot.alert,
@@ -399,7 +414,7 @@ function Despista() {
         <Joystick onMove={onPadMove} onAuxTouch={tryActivateSlotAtTouch} size={joystickSize} />
       </View>}
 
-      {(menu || paused || showOptions) && <View style={[s.overlay, {
+      {(menu || paused || suspended || showOptions) && <View style={[s.overlay, {
         paddingTop: pad.top,
         paddingBottom: pad.bottom,
         paddingLeft: pad.left,
@@ -440,20 +455,24 @@ function Despista() {
             {!!storageError && <Text style={s.error}>{storageError}</Text>}
           </> : <>
             <Text style={s.eyebrow}>SOBREVIVA À CIDADE</Text>
-            <Text accessibilityRole="header" style={s.title}>{paused ? 'PAUSA' : title}</Text>
-            <Text style={s.description}>{paused ? 'Respire. A cidade espera por você.'
+            <Text accessibilityRole="header" style={s.title}>{suspended ? 'PARTIDA SUSPENSA' : paused ? 'PAUSA' : title}</Text>
+            <Text style={s.description}>{suspended ? 'Sua partida foi preservada. Continue quando estiver pronto.' : paused ? 'Respire. A cidade espera por você.'
               : snapshot.gameOver ? snapshot.reason === 'caught'
                 ? 'Você permaneceu na área de captura por 1,5 segundo. Saia antes que a barra complete.'
                 : 'A cidade seguiu em frente. Continue subindo para não ficar para trás.'
                 : 'Misture-se à multidão, evite a vigilância e despiste os policiais.'}</Text>
-            {(snapshot.gameOver || paused) && <View style={s.stats}>
+            {(snapshot.gameOver || paused || suspended) && <View style={s.stats}>
               <Text style={s.stat}>{snapshot.time}<Text style={s.statCaption}>{'\n'}TEMPO</Text></Text>
               <Text style={s.stat}>{snapshot.distanceLabel}<Text style={s.statCaption}>{'\n'}PERCORRIDO</Text></Text>
             </View>}
-            {paused ? <>
+            {(paused || suspended) ? <>
               <Button onPress={() => {
                 uiLog('menu', 'resume');
-                clearInputs(); game.setPaused(false); refresh();
+                clearInputs();
+                game.setSuspended(false);
+                game.setPaused(false);
+                clearRun().catch(() => {});
+                refresh();
               }}>CONTINUAR</Button>
               <Button secondary onPress={start}>RECOMEÇAR</Button>
               <Button secondary onPress={() => { uiLog('menu', 'achievements-open'); setShowAchievements(true); }}>CONQUISTAS</Button>

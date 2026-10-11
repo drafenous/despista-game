@@ -74,6 +74,47 @@ for (const mode of ['easy','medium','hard','pro','impossible']) {
     }
   });
 }
+test('app suspension freezes all five difficulties without enabling manual pause', () => {
+  for (const mode of ['easy','medium','hard','pro','impossible']) {
+    const game = makeGame(); game.start(mode);
+    const before = game.snapshot().elapsed;
+    game.setSuspended(true);
+    assert.equal(game.snapshot().suspended, true);
+    assert.equal(game.isPlaying(), false);
+    game.step(1 / 30);
+    assert.equal(game.snapshot().elapsed, before);
+    game.setSuspended(false);
+    assert.equal(game.snapshot().suspended, false);
+    assert.equal(game.allowsPause(), mode === 'easy' || mode === 'medium');
+  }
+});
+
+test('active run state round-trips player, inventory, camera and effects', () => {
+  const source = makeGame(); source.start('pro');
+  source.fixture(({ inventory, player, cops, npcs, obstacles, cameras }) => {
+    inventory.push('skates', 'invis');
+    player.x = 123; player.y = 456;
+    cops.splice(1); npcs.splice(2); obstacles.splice(1); cameras.splice(1);
+  });
+  source.usePowerUp(0);
+  for (let i = 0; i < 15; i++) source.step(1 / 60);
+  const saved = source.exportState();
+
+  const restored = makeGame();
+  assert.equal(restored.importState(saved), true);
+  const a = source.snapshot();
+  const b = restored.snapshot();
+
+  assert.equal(b.difficulty, a.difficulty);
+  assert.equal(b.player.x, a.player.x);
+  assert.equal(b.player.y, a.player.y);
+  assert.equal(b.cameraY, a.cameraY);
+  assert.deepEqual(b.inventory, a.inventory);
+  assert.deepEqual(b.effects.map(e => e.label), a.effects.map(e => e.label));
+  assert.equal(b.suspended, true);
+  assert.equal(restored.isPlaying(), false);
+});
+
 test('pause freezes simulation, rejects items, and clears stale movement on restart', () => {
   const game = makeGame(); game.start();
   game.fixture(({inventory}) => inventory.push('skates'));

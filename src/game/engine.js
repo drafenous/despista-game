@@ -33,6 +33,7 @@ export function createGame({width = 360, height = 640, initialBest = 0,
   let started = false;
   let gameOver = false;
   let paused = false;
+  let suspended = false;
   let spawnIndicator = 0;
   let pursuitEscapeTimer = 0;
   let pursuitGraceTimer = 0;
@@ -333,6 +334,14 @@ export function createGame({width = 360, height = 640, initialBest = 0,
   }
   function togglePause(){ setPaused(!paused); }
 
+  function setSuspended(value){
+    if(!started || gameOver){ suspended=false; return; }
+    suspended=!!value;
+    keys.clear();
+    input.active=false;
+    input.x=input.y=0;
+  }
+
   function clearPursuit({countEscape = false, natural = false} = {}){
     const wasAlert = alert;
     alert=false;
@@ -416,7 +425,7 @@ export function createGame({width = 360, height = 640, initialBest = 0,
   }
 
   function usePowerUp(slotIndex){
-    if(!started || gameOver || paused) return;
+    if(!started || gameOver || paused || suspended) return;
     const type=inventory[slotIndex];
     if(!type) return;
 
@@ -517,6 +526,8 @@ export function createGame({width = 360, height = 640, initialBest = 0,
     suspicion = 0;
     alert = false;
     gameOver = false;
+    paused = false;
+    suspended = false;
     spawnIndicator = 2.6;
     pursuitEscapeTimer = 0;
     pursuitGraceTimer = 0;
@@ -595,6 +606,7 @@ export function createGame({width = 360, height = 640, initialBest = 0,
     reset();
     started = true;
     paused = false;
+    suspended = false;
     keys.clear();
     input.active = false;
     input.x = input.y = 0;
@@ -617,6 +629,7 @@ export function createGame({width = 360, height = 640, initialBest = 0,
     gameOver = true;
     started = false;
     paused = false;
+    suspended = false;
     input.active = false;
     input.x = input.y = 0;
     if(elapsed > best){
@@ -2847,7 +2860,7 @@ export function createGame({width = 360, height = 640, initialBest = 0,
 
   function snapshot(){
     return {
-      width: W, height: H, started, paused, gameOver, reason, difficulty,
+      width: W, height: H, started, paused, suspended, gameOver, reason, difficulty,
       allowsPause: allowsPause(),
       elapsed, time: fmt(elapsed), best, bestTime: fmt(best),
       distance: distanceMeters(), screenDistance: screenDistanceMeters(),
@@ -2873,19 +2886,135 @@ export function createGame({width = 360, height = 640, initialBest = 0,
     };
   }
 
+
+  function copyArrayInto(target, source){
+    target.length=0;
+    if(!Array.isArray(source)) return;
+    for(const item of source) target.push(item && typeof item==="object" ? {...item} : item);
+  }
+
+  function exportState(){
+    if(!started || gameOver) return null;
+    return {
+      version:1,
+      difficulty, reason,
+      cameraY, generatedUntil, elapsed,
+      distanceTravelledUnits, screenDistanceTravelledUnits, lastMeasuredCameraY,
+      suspicion, alert, spawnIndicator,
+      pursuitEscapeTimer, pursuitGraceTimer,
+      mainPursuerIndex:cops.indexOf(mainPursuer),
+      bustedTimer, playerIdleTimer,
+      idleHunterCopIndex:cops.indexOf(idleHunterCop),
+      impossiblePursuitStarted,
+      escapeImmunityTimer, soapTimer, skatesTimer, staffTimer,
+      invisibilityTimer, shieldPulseTimer, timeFreezeTimer,
+      cameraAnimTime, powerPickupFlash, powerPickupCooldown,
+      powerBag:[...powerBag], chunksSincePowerUp, lastPowerType,
+      lastPowerSpawnY:Number.isFinite(lastPowerSpawnY) ? lastPowerSpawnY : null,
+      runStats:{
+        ...runStats,
+        dirsInEscape:[...runStats.dirsInEscape],
+        pickedTypes:[...runStats.pickedTypes],
+        usedTypes:[...runStats.usedTypes],
+      },
+      runLastDir,
+      runDirsInEscape:[...runDirsInEscape],
+      runAlertItemsUsed, runMaxBustedInAlert, runSoapInAlert,
+      player:{...player},
+      inventory:[...inventory],
+      powerUps:powerUps.map(item=>({...item})),
+      npcs:npcs.map(item=>({...item})),
+      cops:cops.map(item=>({...item})),
+      cameras:cameras.map(item=>({...item})),
+      decor:decor.map(item=>({...item})),
+      obstacles:obstacles.map(item=>({...item})),
+    };
+  }
+
+  function importState(state){
+    if(!state || state.version!==1) return false;
+    if(!["easy","medium","hard","pro","impossible"].includes(state.difficulty)) return false;
+    if(!state.player || !Array.isArray(state.npcs) || !Array.isArray(state.cops)) return false;
+
+    difficulty=state.difficulty;
+    reason=state.reason ?? null;
+    cameraY=Number(state.cameraY)||0;
+    generatedUntil=Number(state.generatedUntil)||0;
+    elapsed=Math.max(0,Number(state.elapsed)||0);
+    distanceTravelledUnits=Math.max(0,Number(state.distanceTravelledUnits)||0);
+    screenDistanceTravelledUnits=Math.max(0,Number(state.screenDistanceTravelledUnits)||0);
+    lastMeasuredCameraY=Number.isFinite(state.lastMeasuredCameraY) ? state.lastMeasuredCameraY : cameraY;
+    suspicion=Math.max(0,Number(state.suspicion)||0);
+    alert=!!state.alert;
+    started=true;
+    gameOver=false;
+    paused=false;
+    suspended=true;
+    spawnIndicator=Math.max(0,Number(state.spawnIndicator)||0);
+    pursuitEscapeTimer=Math.max(0,Number(state.pursuitEscapeTimer)||0);
+    pursuitGraceTimer=Math.max(0,Number(state.pursuitGraceTimer)||0);
+    bustedTimer=Math.max(0,Number(state.bustedTimer)||0);
+    playerIdleTimer=Math.max(0,Number(state.playerIdleTimer)||0);
+    impossiblePursuitStarted=!!state.impossiblePursuitStarted;
+    escapeImmunityTimer=Math.max(0,Number(state.escapeImmunityTimer)||0);
+    soapTimer=Math.max(0,Number(state.soapTimer)||0);
+    skatesTimer=Math.max(0,Number(state.skatesTimer)||0);
+    staffTimer=Math.max(0,Number(state.staffTimer)||0);
+    invisibilityTimer=Math.max(0,Number(state.invisibilityTimer)||0);
+    shieldPulseTimer=Math.max(0,Number(state.shieldPulseTimer)||0);
+    timeFreezeTimer=Math.max(0,Number(state.timeFreezeTimer)||0);
+    cameraAnimTime=Math.max(0,Number(state.cameraAnimTime)||0);
+    powerPickupFlash=Math.max(0,Number(state.powerPickupFlash)||0);
+    powerPickupCooldown=Math.max(0,Number(state.powerPickupCooldown)||0);
+    powerBag=Array.isArray(state.powerBag) ? [...state.powerBag] : [];
+    chunksSincePowerUp=Math.max(0,Number(state.chunksSincePowerUp)||0);
+    lastPowerType=state.lastPowerType ?? null;
+    lastPowerSpawnY=Number.isFinite(state.lastPowerSpawnY) ? state.lastPowerSpawnY : -Infinity;
+
+    runStats={...createEmptyRunStats(),...(state.runStats||{})};
+    runStats.dirsInEscape=Array.isArray(runStats.dirsInEscape) ? [...runStats.dirsInEscape] : [];
+    runStats.pickedTypes=Array.isArray(runStats.pickedTypes) ? [...runStats.pickedTypes] : [];
+    runStats.usedTypes=Array.isArray(runStats.usedTypes) ? [...runStats.usedTypes] : [];
+    runLastDir=typeof state.runLastDir==="string" ? state.runLastDir : null;
+    runDirsInEscape=new Set(Array.isArray(state.runDirsInEscape) ? state.runDirsInEscape : []);
+    runAlertItemsUsed=Math.max(0,Number(state.runAlertItemsUsed)||0);
+    runMaxBustedInAlert=Math.max(0,Number(state.runMaxBustedInAlert)||0);
+    runSoapInAlert=!!state.runSoapInAlert;
+
+    Object.assign(player,state.player);
+    copyArrayInto(inventory,state.inventory);
+    copyArrayInto(powerUps,state.powerUps);
+    copyArrayInto(npcs,state.npcs);
+    copyArrayInto(cops,state.cops);
+    copyArrayInto(cameras,state.cameras);
+    copyArrayInto(decor,state.decor);
+    copyArrayInto(obstacles,state.obstacles);
+
+    mainPursuer=Number.isInteger(state.mainPursuerIndex) && state.mainPursuerIndex>=0
+      ? cops[state.mainPursuerIndex] ?? null : null;
+    idleHunterCop=Number.isInteger(state.idleHunterCopIndex) && state.idleHunterCopIndex>=0
+      ? cops[state.idleHunterCopIndex] ?? null : null;
+
+    keys.clear();
+    input.active=false;
+    input.x=input.y=0;
+    return true;
+  }
+
   reset();
   return {
-    start, setPaused, togglePause, usePowerUp, draw, drawBackground, drawForeground,
+    start, setPaused, togglePause, setSuspended, exportState, importState, usePowerUp, draw, drawBackground, drawForeground,
     backgroundKey, snapshot, allowsPause,
-    isPlaying: () => started && !paused && !gameOver,
+    isPlaying: () => started && !paused && !suspended && !gameOver,
     describeDifficulty: difficultyDescription,
     powers: POWER_TYPES,
     step(dt){
       if(!Number.isFinite(dt) || dt < 0) throw new Error("Delta inválido");
+      if(suspended) return;
       update(Math.min(dt, 1/30));
     },
     setInput(x,y){
-      input.active = started && !paused && !gameOver;
+      input.active = started && !paused && !suspended && !gameOver;
       input.x = Number.isFinite(x) ? clamp(x,-1,1) : 0;
       input.y = Number.isFinite(y) ? clamp(y,-1,1) : 0;
     },
