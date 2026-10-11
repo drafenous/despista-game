@@ -2,6 +2,8 @@ import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import { uiLog } from '../debug/uiLog';
 
+export type AuxTouchPhase = 'start' | 'end' | 'cancel';
+
 /** Four-way direction from a pixel delta (shared by fixed and floating sticks). */
 export function directionFromDelta(dx: number, dy: number, deadZone = 10): { x: number; y: number } {
   const dead = Math.hypot(dx, dy) < deadZone;
@@ -29,7 +31,7 @@ export function JoystickFace({ size, offset }: {
 /** Fixed corner joystick. */
 export function Joystick({ onMove, onAuxTouch, size = 164 }: {
   onMove: (x: number, y: number) => void;
-  onAuxTouch?: (event: GestureResponderEvent) => void;
+  onAuxTouch?: (event: GestureResponderEvent, phase: AuxTouchPhase, primaryTouchId: string | null) => void;
   size?: number;
 }) {
   const touch = useRef<{ id: string; x: number; y: number } | null>(null);
@@ -39,9 +41,9 @@ export function Joystick({ onMove, onAuxTouch, size = 164 }: {
     touch.current = null; onMove(0, 0); setOffset({ x: 0, y: 0 });
   }, [onMove]);
   const start = (event: GestureResponderEvent) => {
-    onAuxTouch?.(event);
     if (touch.current) {
-      uiLog('joystick.fixed', 'touch-ignored', { reason: 'already-tracking', touches: event.nativeEvent.touches.length });
+      onAuxTouch?.(event, 'start', touch.current.id);
+      uiLog('joystick.fixed', 'aux-touch', { primary: touch.current.id, touches: event.nativeEvent.touches.length });
       return;
     }
     const point = event.nativeEvent.changedTouches[0];
@@ -65,9 +67,15 @@ export function Joystick({ onMove, onAuxTouch, size = 164 }: {
     });
   };
   const end = (event: GestureResponderEvent) => {
-    if (!event.nativeEvent.touches.some(t => String(t.identifier) === touch.current?.id)) release();
+    const primaryTouchId = touch.current?.id ?? null;
+    onAuxTouch?.(event, 'end', primaryTouchId);
+    if (primaryTouchId && !event.nativeEvent.touches.some(t => String(t.identifier) === primaryTouchId)) release();
   };
-  return <View onTouchStart={start} onTouchMove={move} onTouchEnd={end} onTouchCancel={release}
+  const cancel = (event: GestureResponderEvent) => {
+    onAuxTouch?.(event, 'cancel', touch.current?.id ?? null);
+    release();
+  };
+  return <View onTouchStart={start} onTouchMove={move} onTouchEnd={end} onTouchCancel={cancel}
     style={[face.pad, { width: size, height: size }]} accessibilityLabel="Controle direcional: arraste para mover">
     <JoystickFace size={size} offset={offset} />
   </View>;

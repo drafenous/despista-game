@@ -15,7 +15,7 @@ import { DIFFICULTIES, type Difficulty, type Power, type Snapshot } from './src/
 import { fitWorldToViewport, WORLD_HEIGHT, WORLD_WIDTH } from './src/game/viewport';
 import { FloatingJoystick } from './src/components/FloatingJoystick';
 import { GameCanvas } from './src/components/GameCanvas';
-import { Joystick } from './src/components/Joystick';
+import { Joystick, type AuxTouchPhase } from './src/components/Joystick';
 import { PowerUpButton } from './src/components/PowerUpButton';
 import { useChaseAlertSound } from './src/audio/chaseAlert';
 import { playSfx } from './src/audio/sfx';
@@ -77,6 +77,7 @@ function Despista() {
   const inputSources = useRef({ pad: { x: 0, y: 0 } });
   const slotLayouts = useRef<({ x: number; y: number; w: number; h: number } | null)[]>([null, null, null]);
   const slotNodes = useRef<(View | null)[]>([null, null, null]);
+  const handledPowerTouchIds = useRef(new Set<string>());
   const trackerRef = useRef(createAchievementTracker());
   const endedRunRef = useRef(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -159,6 +160,7 @@ function Despista() {
   }, [game]);
   const clearInputs = useCallback(() => {
     inputSources.current = { pad: { x: 0, y: 0 } };
+    handledPowerTouchIds.current.clear();
     game.setInput(0, 0);
   }, [game]);
 
@@ -240,23 +242,28 @@ function Despista() {
   const controlHint = CONTROL_MODES.find(mode => mode.id === settings.controlMode)?.hint
     ?? 'Arraste o direcional em quatro direções.';
 
-  const lastPowerUpAt = useRef(0);
-
-  /** Android delivers 2nd+ fingers to the view that got the first ACTION_DOWN
-   * (joystick). Hit-test ALL fingers against inventory — changedTouches alone
-   * often still reports the joystick finger, so the slot never matches. */
-  const tryActivateSlotAtTouch = useCallback((event: GestureResponderEvent) => {
+  /** Android keeps subsequent fingers on the native view that received ACTION_DOWN.
+   * The joystick forwards those auxiliary touches here while preserving its primary finger. */
+  const handleAuxTouch = useCallback((event: GestureResponderEvent, phase: AuxTouchPhase, primaryTouchId: string | null) => {
+    const changed = Array.from(event.nativeEvent.changedTouches);
+    if (phase === 'cancel') {
+      for (const point of changed) handledPowerTouchIds.current.delete(String(point.identifier));
+      return;
+    }
     if (!active) return;
-    const now = Date.now();
-    if (now - lastPowerUpAt.current < 280) return;
 
-    const points = event.nativeEvent.touches.length > 0
-      ? event.nativeEvent.touches
-      : event.nativeEvent.changedTouches;
+    const points = changed.filter(point => String(point.identifier) !== primaryTouchId);
     const liveInventory = game.snapshot().inventory;
     const padHit = 10;
 
     for (const point of points) {
+      const id = String(point.identifier);
+      if (phase === 'end' && handledPowerTouchIds.current.has(id)) {
+        handledPowerTouchIds.current.delete(id);
+        continue;
+      }
+      if (phase === 'start' && handledPowerTouchIds.current.has(id)) continue;
+
       const { pageX, pageY } = point;
       for (let index = 0; index < 3; index++) {
         const box = slotLayouts.current[index];
@@ -268,36 +275,28 @@ function Despista() {
 
         const type = liveInventory[index];
         if (!type) {
-          uiLog('powerup.panel', 'hit-empty-slot', {
-            index,
-            x: Math.round(pageX),
-            y: Math.round(pageY),
-          });
-          return;
+          uiLog('powerup.panel', 'hit-empty-slot', { index, phase, id });
+          break;
         }
 
-        lastPowerUpAt.current = now;
+        handledPowerTouchIds.current.add(id);
         uiLog('powerup.panel', 'activate-via-multitouch', {
           index,
           type,
+          phase,
+          id,
           x: Math.round(pageX),
           y: Math.round(pageY),
-          fingers: points.length,
         });
         game.usePowerUp(index);
         refresh();
+        if (phase === 'end') handledPowerTouchIds.current.delete(id);
         return;
       }
     }
 
-    if (points.length >= 2) {
-      uiLog('powerup.panel', 'multitouch-miss', {
-        fingers: points.length,
-        points: Array.from(points).map(t => ({ x: Math.round(t.pageX), y: Math.round(t.pageY) })),
-        slots: slotLayouts.current.map((b, i) => b && {
-          i, x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h),
-        }),
-      });
+    if (phase === 'end') {
+      for (const point of points) handledPowerTouchIds.current.delete(String(point.identifier));
     }
   }, [active, game, refresh]);
 
@@ -307,16 +306,14 @@ function Despista() {
       const { width, height } = event.nativeEvent.layout;
       setViewport(previous => previous.width === width && previous.height === height
         ? previous : { width, height });
-    }}
-      onTouchStart={tryActivateSlotAtTouch}
-    >
+    }}>
       <GameCanvas game={game} scale={scale} offsetX={offsetX} offsetY={offsetY}
         viewportWidth={viewport.width} viewportHeight={viewport.height} onSnapshot={handleSnapshot} />
 
       {!!toastName && <AchievementToast name={toastName} />}
 
       {active && showFreePad && (
-        <FloatingJoystick onMove={onPadMove} onAuxTouch={tryActivateSlotAtTouch} size={joystickSize} />
+        <FloatingJoystick onMove={onPadMove} onAuxTouch={handleAuxTouch} size={joystickSize} />
       )}
 
       <View pointerEvents="box-none" style={[s.hud, { top: pad.top, left: pad.left, right: pad.right }]}>
@@ -396,7 +393,7 @@ function Despista() {
 
       {active && showFixedPad && <View pointerEvents="box-none"
         style={[s.joystickWrap, { left: pad.left, bottom: pad.bottom }]}>
-        <Joystick onMove={onPadMove} onAuxTouch={tryActivateSlotAtTouch} size={joystickSize} />
+        <Joystick onMove={onPadMove} onAuxTouch={handleAuxTouch} size={joystickSize} />
       </View>}
 
       {(menu || paused || showOptions) && <View style={[s.overlay, {

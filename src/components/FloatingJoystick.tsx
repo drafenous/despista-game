@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import { uiLog } from '../debug/uiLog';
-import { directionFromDelta, JoystickFace } from './Joystick';
+import { directionFromDelta, JoystickFace, type AuxTouchPhase } from './Joystick';
 
 /**
  * Floating / dynamic joystick: appears at the touch point, disappears on release.
@@ -9,7 +9,7 @@ import { directionFromDelta, JoystickFace } from './Joystick';
  */
 export function FloatingJoystick({ onMove, onAuxTouch, size = 164 }: {
   onMove: (x: number, y: number) => void;
-  onAuxTouch?: (event: GestureResponderEvent) => void;
+  onAuxTouch?: (event: GestureResponderEvent, phase: AuxTouchPhase, primaryTouchId: string | null) => void;
   size?: number;
 }) {
   const touch = useRef<{ id: string; pageX: number; pageY: number } | null>(null);
@@ -25,9 +25,9 @@ export function FloatingJoystick({ onMove, onAuxTouch, size = 164 }: {
   }, [onMove]);
 
   const start = (event: GestureResponderEvent) => {
-    onAuxTouch?.(event);
     if (touch.current) {
-      uiLog('joystick.free', 'touch-ignored', { reason: 'already-tracking', touches: event.nativeEvent.touches.length });
+      onAuxTouch?.(event, 'start', touch.current.id);
+      uiLog('joystick.free', 'aux-touch', { primary: touch.current.id, touches: event.nativeEvent.touches.length });
       return;
     }
     const point = event.nativeEvent.changedTouches[0];
@@ -59,11 +59,18 @@ export function FloatingJoystick({ onMove, onAuxTouch, size = 164 }: {
   };
 
   const end = (event: GestureResponderEvent) => {
-    if (!event.nativeEvent.touches.some(t => String(t.identifier) === touch.current?.id)) release();
+    const primaryTouchId = touch.current?.id ?? null;
+    onAuxTouch?.(event, 'end', primaryTouchId);
+    if (primaryTouchId && !event.nativeEvent.touches.some(t => String(t.identifier) === primaryTouchId)) release();
+  };
+
+  const cancel = (event: GestureResponderEvent) => {
+    onAuxTouch?.(event, 'cancel', touch.current?.id ?? null);
+    release();
   };
 
   return <View accessibilityLabel="Joystick livre: toque e arraste para mover"
-    onTouchStart={start} onTouchMove={move} onTouchEnd={end} onTouchCancel={release}
+    onTouchStart={start} onTouchMove={move} onTouchEnd={end} onTouchCancel={cancel}
     style={styles.layer}>
     {anchor && (
       <View pointerEvents="none" style={[styles.pad, {

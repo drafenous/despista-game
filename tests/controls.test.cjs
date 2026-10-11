@@ -41,6 +41,15 @@ test('power activates once while joystick finger remains held and allows repeate
   assert.equal(b.count(), 3);
 });
 
+test('stale button touch recovers when the previous identifier is no longer active', () => {
+  const b = button();
+  b.props.onTouchStart(event([2], [1, 2]));
+  assert.equal(b.count(), 1);
+  // Simulates Android rerouting the end event elsewhere: touch 2 vanished, but the button missed its end.
+  b.props.onTouchStart(event([4], [1, 4]));
+  assert.equal(b.count(), 2);
+});
+
 test('empty slots ignore touches and accessibility activation', () => {
   const b = button(true);
   b.props.onTouchStart(event([2], [1, 2]));
