@@ -12,6 +12,7 @@ run/main_scene="res://scenes/Main.tscn"
 [autoload]
 
 SaveManager="*res://scripts/core/SaveManager.gd"
+AudioManager="*res://scripts/core/AudioManager.gd"
 
 [display]
 
