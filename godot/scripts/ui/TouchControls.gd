@@ -15,6 +15,7 @@ var origin := Vector2.ZERO
 var current_direction := Vector2.ZERO
 var free_center := Vector2.ZERO
 var inventory_rects: Array[Rect2] = []
+var blocked_rects: Array[Rect2] = []
 var _mouse_dragging := false
 
 func _ready() -> void:
@@ -36,6 +37,9 @@ func set_active(value: bool) -> void:
 
 func set_inventory_rects(rects: Array[Rect2]) -> void:
 	inventory_rects = rects
+
+func set_blocked_rects(rects: Array[Rect2]) -> void:
+	blocked_rects = rects
 
 func _input(event: InputEvent) -> void:
 	if not active:
@@ -77,6 +81,9 @@ func _handle_drag(event: InputEventScreenDrag) -> void:
 		return
 
 func _begin_pointer(pointer_id: int, position: Vector2) -> void:
+	for rect in blocked_rects:
+		if rect.has_point(position):
+			return
 	if control_mode == "fixed":
 		if position.distance_to(FIXED_CENTER) > JOYSTICK_RADIUS * 1.25:
 			return

@@ -38,6 +38,7 @@ var control_option: OptionButton
 var corner_option: OptionButton
 var direction_option: OptionButton
 var achievement_list: VBoxContainer
+var toast_label: Label
 
 var current_settings := SaveManager.DEFAULT_SETTINGS.duplicate(true)
 var current_difficulty := DifficultyRules.MEDIUM
@@ -57,6 +58,13 @@ func _build() -> void:
 	gameover_overlay = _build_gameover()
 	options_overlay = _build_options()
 	achievements_overlay = _build_achievements()
+	toast_label = _label("", 11, Color("#fff6a8"))
+	toast_label.position = Vector2(65, 54)
+	toast_label.size = Vector2(230, 28)
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_label.visible = false
+	toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(toast_label)
 	show_main_menu()
 
 func _label(text: String, font_size: int = 12, color: Color = Color.WHITE) -> Label:
@@ -363,6 +371,10 @@ func refresh(snapshot: Dictionary) -> void:
 		var effect_label := _label("%s %.1fs" % [str(effect.label), float(effect.remaining)], 8, Color(str(effect.color)))
 		effects_box.add_child(effect_label)
 
+func show_gameplay() -> void:
+	_hide_overlays()
+	hud.visible = true
+
 func show_main_menu() -> void:
 	_hide_overlays()
 	menu_overlay.visible = true
@@ -415,6 +427,24 @@ func show_achievements(items: Array[Dictionary]) -> void:
 		row.add_child(progress)
 		achievement_list.add_child(row)
 	_first_button(achievements_overlay)
+
+func show_achievement_toast(name: String) -> void:
+	toast_label.text = "CONQUISTA: %s" % name
+	toast_label.visible = true
+	toast_label.modulate = Color.WHITE
+	var tween := create_tween()
+	tween.tween_interval(2.0)
+	tween.tween_property(toast_label, "modulate:a", 0.0, .5)
+	tween.tween_callback(func():
+		toast_label.visible = false
+		toast_label.modulate = Color.WHITE
+	)
+
+func interactive_rects() -> Array[Rect2]:
+	var result: Array[Rect2] = []
+	if pause_button.visible:
+		result.append(pause_button.get_global_rect())
+	return result
 
 func _hide_overlays() -> void:
 	for layer in [menu_overlay, pause_overlay, suspended_overlay, gameover_overlay, options_overlay, achievements_overlay]:

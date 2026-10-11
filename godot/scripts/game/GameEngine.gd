@@ -1350,6 +1350,15 @@ func snapshot() -> Dictionary:
 		"run_stats": run_stats.duplicate(true),
 	}
 
+func return_to_menu() -> void:
+	reset()
+	started = false
+	game_over = false
+	paused = false
+	suspended = false
+	reason = ""
+	input_dir = Vector2.ZERO
+
 func _end_run(cause: String) -> void:
 	if game_over:
 		return
@@ -1367,7 +1376,7 @@ func _end_run(cause: String) -> void:
 func export_state() -> Dictionary:
 	return {
 		"version": 1,
-		"rng_state": rng.state,
+		"rng_state": str(rng.state),
 		"started": started,
 		"game_over": game_over,
 		"reason": reason,
@@ -1411,7 +1420,7 @@ func export_state() -> Dictionary:
 		"power_bag": power_bag.duplicate(),
 		"chunks_since_power_up": chunks_since_power_up,
 		"last_power_type": last_power_type,
-		"last_power_spawn_y": last_power_spawn_y,
+		"last_power_spawn_y": last_power_spawn_y if is_finite(last_power_spawn_y) else -999999999.0,
 		"run_stats": run_stats.duplicate(true),
 		"run_dirs_in_escape": run_dirs_in_escape.duplicate(),
 		"run_alert_items_used": run_alert_items_used,
@@ -1474,7 +1483,7 @@ func restore_state(state: Dictionary) -> bool:
 	run_alert_items_used = int(state.get("run_alert_items_used", 0))
 	run_max_busted_in_alert = float(state.get("run_max_busted_in_alert", 0.0))
 	run_soap_in_alert = bool(state.get("run_soap_in_alert", false))
-	var restored_rng_state := int(state.get("rng_state", 0))
+	var restored_rng_state := int(str(state.get("rng_state", "0")))
 	if restored_rng_state != 0:
 		rng.state = restored_rng_state
 	paused = false
