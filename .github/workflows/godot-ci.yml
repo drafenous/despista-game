@@ -48,3 +48,8 @@ jobs:
       - name: Run achievement tests
         shell: bash
         run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_achievements.gd
+
+      - name: Run multitouch control tests
+        shell: bash
+        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_controls.gd
+
