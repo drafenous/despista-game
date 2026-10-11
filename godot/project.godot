@@ -1,0 +1,36 @@
+; Despista! — Godot mobile project
+; Reconstructed from the validated React Native/HTML prototype.
+
+config_version=5
+
+[application]
+
+config/name="Despista!"
+config/description="Corra. Misture-se. Escape."
+run/main_scene="res://scenes/Main.tscn"
+
+[autoload]
+
+SaveManager="*res://scripts/core/SaveManager.gd"
+
+[display]
+
+[display/window]
+
+size/viewport_width=360
+size/viewport_height=640
+size/window_width_override=360
+size/window_height_override=640
+stretch/mode="canvas_items"
+handheld/orientation=1
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+textures/default_filters/use_nearest_mipmap_filter=false
+textures/canvas_textures/default_texture_filter=0
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
