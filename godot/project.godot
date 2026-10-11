@@ -7,6 +7,7 @@ config_version=5
 
 config/name="Despista!"
 config/description="Corra. Misture-se. Escape."
+config/unique_name="com.despista.app"
 run/main_scene="res://scenes/Main.tscn"
 
 [autoload]
