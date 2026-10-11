@@ -53,3 +53,7 @@ jobs:
         shell: bash
         run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_controls.gd
 
+      - name: Run persistence tests
+        shell: bash
+        run: Godot_v4.7.2-stable_linux.x86_64 --headless --path godot --script res://tests/test_persistence.gd
+
